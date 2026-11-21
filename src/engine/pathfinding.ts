@@ -33,17 +33,57 @@ export function getRoadMask(tiles: MapTile[], x: number, y: number): number {
   return mask;
 }
 
-export function isIntersectionTile(tiles: MapTile[], x: number, y: number): boolean {
-  const tile = tiles[y * GRID_COLS + x];
-  if (!tile || !tile.hasRoad) return false;
-  return getRoadNeighbors(tiles, x, y).length >= 3;
+export function getEffectiveRoadMask(tiles: MapTile[], x: number, y: number): number {
+  const has = (tx: number, ty: number) =>
+    inBounds(tx, ty) && tiles[ty * GRID_COLS + tx].hasRoad;
+  if (!has(x, y)) return 0;
+
+  let mask = 0;
+  // North edge (x, y-1): suppress only if both rows run parallel E-W with no N/S continuation
+  if (has(x, y - 1)) {
+    const parallelEW =
+      (has(x - 1, y) || has(x + 1, y)) &&
+      (has(x - 1, y - 1) || has(x + 1, y - 1)) &&
+      !has(x, y - 2) &&
+      !has(x, y + 1);
+    if (!parallelEW) mask |= 1;
+  }
+  // South edge (x, y+1)
+  if (has(x, y + 1)) {
+    const parallelEW =
+      (has(x - 1, y) || has(x + 1, y)) &&
+      (has(x - 1, y + 1) || has(x + 1, y + 1)) &&
+      !has(x, y - 1) &&
+      !has(x, y + 2);
+    if (!parallelEW) mask |= 4;
+  }
+  // East edge (x+1, y): suppress only if both cols run parallel N-S with no E/W continuation
+  if (has(x + 1, y)) {
+    const parallelNS =
+      (has(x, y - 1) || has(x, y + 1)) &&
+      (has(x + 1, y - 1) || has(x + 1, y + 1)) &&
+      !has(x - 1, y) &&
+      !has(x + 2, y);
+    if (!parallelNS) mask |= 2;
+  }
+  // West edge (x-1, y)
+  if (has(x - 1, y)) {
+    const parallelNS =
+      (has(x, y - 1) || has(x, y + 1)) &&
+      (has(x - 1, y - 1) || has(x - 1, y + 1)) &&
+      !has(x + 1, y) &&
+      !has(x - 2, y);
+    if (!parallelNS) mask |= 8;
+  }
+  return mask;
 }
 
 export function isHighwayTile(tiles: MapTile[], x: number, y: number): boolean {
   const has = (tx: number, ty: number) =>
     inBounds(tx, ty) && tiles[ty * GRID_COLS + tx].hasRoad;
   if (!has(x, y)) return false;
-  // Two or more adjacent road lanes side-by-side form a multi-lane highway (any 2x2 road block)
+  // Two adjacent roads ONLY merge into a wider highway plaza when they form a turn/junction
+  // (i.e., the 2x2 road block has road continuations exiting on BOTH N/S and E/W outer axes).
   const quads = [
     [-1, -1],
     [1, -1],
@@ -52,9 +92,61 @@ export function isHighwayTile(tiles: MapTile[], x: number, y: number): boolean {
   ];
   for (const [dx, dy] of quads) {
     if (has(x + dx, y) && has(x, y + dy) && has(x + dx, y + dy)) {
-      return true;
+      const qx0 = Math.min(x, x + dx);
+      const qy0 = Math.min(y, y + dy);
+      const outerNS =
+        has(qx0, qy0 - 1) ||
+        has(qx0 + 1, qy0 - 1) ||
+        has(qx0, qy0 + 2) ||
+        has(qx0 + 1, qy0 + 2);
+      const outerEW =
+        has(qx0 - 1, qy0) ||
+        has(qx0 - 1, qy0 + 1) ||
+        has(qx0 + 2, qy0) ||
+        has(qx0 + 2, qy0 + 1);
+      if (outerNS && outerEW) {
+        return true;
+      }
     }
   }
+  return false;
+}
+
+export function isIntersectionTile(tiles: MapTile[], x: number, y: number): boolean {
+  const tile = tiles[y * GRID_COLS + x];
+  if (!tile || !tile.hasRoad) return false;
+  const neighbors = getRoadNeighbors(tiles, x, y);
+  if (neighbors.length < 3) return false;
+
+  if (!isHighwayTile(tiles, x, y)) {
+    return true;
+  }
+
+  // On a straight 2-lane highway, each tile naturally has 3 neighbors (two in-lane + one parallel lane).
+  // Only mark as a controlled intersection if a non-highway side road joins, or if it's a 4-way crossing
+  // extending across BOTH axes beyond a 2-tile highway width.
+  const nHw = isHighwayTile(tiles, x, y - 1);
+  const sHw = isHighwayTile(tiles, x, y + 1);
+  const wHw = isHighwayTile(tiles, x - 1, y);
+  const eHw = isHighwayTile(tiles, x + 1, y);
+
+  const has = (tx: number, ty: number) =>
+    inBounds(tx, ty) && tiles[ty * GRID_COLS + tx].hasRoad;
+  const n = has(x, y - 1);
+  const s = has(x, y + 1);
+  const w = has(x - 1, y);
+  const e = has(x + 1, y);
+
+  if ((n && !nHw) || (s && !sHw) || (w && !wHw) || (e && !eHw)) {
+    return true;
+  }
+
+  if (n && s && w && e) {
+    const extNS = has(x, y - 2) && has(x, y + 2);
+    const extEW = has(x - 2, y) && has(x + 2, y);
+    if (extNS && extEW) return true;
+  }
+
   return false;
 }
 
@@ -84,6 +176,7 @@ export function findRoadPath(
   const fScore = new Float32Array(total).fill(Infinity);
   const cameFrom = new Int32Array(total).fill(-1);
   const closed = new Uint8Array(total);
+  const inOpen = new Uint8Array(total);
 
   const startIdx = start.y * GRID_COLS + start.x;
   const goalIdx = goal.y * GRID_COLS + goal.x;
@@ -92,6 +185,7 @@ export function findRoadPath(
   fScore[startIdx] = Math.abs(goal.x - start.x) + Math.abs(goal.y - start.y);
 
   const open: number[] = [startIdx];
+  inOpen[startIdx] = 1;
 
   while (open.length > 0) {
     // Find lowest fScore in open list
@@ -122,6 +216,7 @@ export function findRoadPath(
     }
 
     open.splice(bestPos, 1);
+    inOpen[current] = 0;
     closed[current] = 1;
 
     const cx = current % GRID_COLS;
@@ -157,7 +252,8 @@ export function findRoadPath(
         cameFrom[nIdx] = current;
         gScore[nIdx] = tentativeG;
         fScore[nIdx] = tentativeG + Math.abs(goal.x - nx) + Math.abs(goal.y - ny);
-        if (!open.includes(nIdx)) {
+        if (!inOpen[nIdx]) {
+          inOpen[nIdx] = 1;
           open.push(nIdx);
         }
       }
@@ -167,7 +263,12 @@ export function findRoadPath(
   return null;
 }
 
-export function isPedestrianTileWalkable(tile: MapTile, allowFrozenWater = false): boolean {
+export function isPedestrianTileWalkable(
+  tile: MapTile,
+  allowFrozenWater = false,
+  allowAllTerrain = false
+): boolean {
+  if (allowAllTerrain) return true;
   if (tile.isBridgeBroken) return false;
   if (tile.hasRoad) {
     return Boolean(tile.hasZebraCrossing) || tile.building?.category === 'road_path';
@@ -224,17 +325,19 @@ export function findNearestWalkableTile(
 
 /**
  * Finds a 4-directional walking path for citizens, woodcutters, planters, fishers, and hobbyists.
- * Strictly prohibits stepping onto road tiles unless the tile has a Zebra Crossing (or road_path).
+ * Strictly prohibits stepping onto road tiles unless the tile has a Zebra Crossing (or road_path),
+ * except when allowAllTerrain is enabled (foreign invading armies & tanks).
  */
 export function findPedestrianPath(
   tiles: MapTile[],
   start: GridPoint,
   goal: GridPoint,
-  allowFrozenWater = false
+  allowFrozenWater = false,
+  allowAllTerrain = false
 ): GridPoint[] | null {
   if (!inBounds(start.x, start.y) || !inBounds(goal.x, goal.y)) return null;
   const goalTile = tiles[goal.y * GRID_COLS + goal.x];
-  if (!isPedestrianTileWalkable(goalTile, allowFrozenWater)) return null;
+  if (!isPedestrianTileWalkable(goalTile, allowFrozenWater, allowAllTerrain)) return null;
 
   if (start.x === goal.x && start.y === goal.y) {
     return [start];
@@ -245,6 +348,7 @@ export function findPedestrianPath(
   const fScore = new Float32Array(total).fill(Infinity);
   const cameFrom = new Int32Array(total).fill(-1);
   const closed = new Uint8Array(total);
+  const inOpen = new Uint8Array(total);
 
   const startIdx = start.y * GRID_COLS + start.x;
   const goalIdx = goal.y * GRID_COLS + goal.x;
@@ -253,6 +357,7 @@ export function findPedestrianPath(
   fScore[startIdx] = Math.abs(goal.x - start.x) + Math.abs(goal.y - start.y);
 
   const open: number[] = [startIdx];
+  inOpen[startIdx] = 1;
 
   while (open.length > 0) {
     let bestPos = 0;
@@ -282,6 +387,7 @@ export function findPedestrianPath(
     }
 
     open.splice(bestPos, 1);
+    inOpen[current] = 0;
     closed[current] = 1;
 
     const cx = current % GRID_COLS;
@@ -295,10 +401,11 @@ export function findPedestrianPath(
       if (closed[nIdx]) continue;
 
       const nTile = tiles[nIdx];
-      if (!isPedestrianTileWalkable(nTile, allowFrozenWater)) continue;
+      if (!isPedestrianTileWalkable(nTile, allowFrozenWater, allowAllTerrain)) continue;
 
       // Strictly forbid walking on top of intermediate buildings: route through gaps, parks, crossings & open ground
       if (
+        !allowAllTerrain &&
         nIdx !== goalIdx &&
         nTile.building &&
         nTile.building.category !== 'park' &&
@@ -307,14 +414,15 @@ export function findPedestrianPath(
         continue;
       }
 
-      const stepCost = 1;
+      const stepCost = allowAllTerrain && nTile.terrain === 'water' && !nTile.hasRoad && !nTile.hasFootbridge ? 4 : 1;
       const tentativeG = gScore[current] + stepCost;
 
       if (tentativeG < gScore[nIdx]) {
         cameFrom[nIdx] = current;
         gScore[nIdx] = tentativeG;
         fScore[nIdx] = tentativeG + Math.abs(goal.x - nx) + Math.abs(goal.y - ny);
-        if (!open.includes(nIdx)) {
+        if (!inOpen[nIdx]) {
+          inOpen[nIdx] = 1;
           open.push(nIdx);
         }
       }

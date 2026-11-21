@@ -644,6 +644,41 @@ const FACTORY_ART = parseArt(
   }
 );
 
+const CROPS_ART = parseArt(
+  [
+    '....................',
+    '..SSSSSSSSSSSSSSSS..',
+    '..SDDDDDDDDDDDDDDS..',
+    '..SDYYGGYYYYGGYYDS..',
+    '..SDYYGGYYYYGGYYDS..',
+    '..SDDDDDDDDDDDDDDS..',
+    '..SDGGYYYYGGYYYYDS..',
+    '..SDGGYYYYGGYYYYDS..',
+    '..SDDDDDDDDDDDDDDS..',
+    '..SDYYGGYYYYGGYYDS..',
+    '..SDYYGGYYYYGGYYDS..',
+    '..SDDDDDDDDDDDDDDS..',
+    '..SBBBBBBDDDDDDDDS..',
+    '..SBRRRRBDGGGGGGDS..',
+    '..SBRWWRBDDDDDDDDS..',
+    '..SBBBBBBDDDDDDDDS..',
+    '..SSSSSSSSSSSSSSSS..',
+    '....................',
+    '....................',
+    '....................',
+  ],
+  {
+    '.': '',
+    S: '#78350F',
+    D: '#713F12',
+    Y: '#FACC15',
+    G: '#4ADE80',
+    B: '#B91C1C',
+    R: '#DC2626',
+    W: '#FEF3C7',
+  }
+);
+
 export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
   {
     id: 'house',
@@ -726,6 +761,14 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     capacity: 42,
   },
   {
+    id: 'crops',
+    name: 'Crops',
+    category: 'crops',
+    iconGrid: CROPS_ART,
+    accentColor: '#CA8A04',
+    capacity: 22,
+  },
+  {
     id: 'market',
     name: 'Market',
     category: 'commercial',
@@ -800,6 +843,7 @@ export const CIVIC_PLOT_BEHAVIORS: BuildingBlueprint['category'][] = [
   'fire_station',
   'cemetery',
   'factory',
+  'crops',
   'commercial',
   'park',
 ];
@@ -809,16 +853,17 @@ export const CATEGORY_LABELS: Record<BuildingBlueprint['category'], string> = {
   landmark: 'Not for Cars (Scenic / No Car Trips)',
   workplace: 'Job Opportunities (Commuter Workplace)',
   factory: 'Factory (Goods, Economy & Smokestacks)',
+  crops: 'Crops Plot (Harvest, Food Supply & Farm Vans)',
   visit_spot: 'Go & Leave (Library, Cafe, Venue)',
   residential: 'Residential (Forms Neighbourhoods)',
   city_hall: 'City Hall (Mayor Speeches & Protests)',
-  school: 'School (Drop-off & Pickup Rush)',
+  school: 'School (Classes & Field Trips)',
   hospital: 'Hospital (24/7 + Ambulances)',
   police: 'Police Station (Patrols, Robberies & Raids)',
   jail: 'City Jail (Holds Arrested Citizens & Releases)',
   fire_station: 'Fire Station (Dispatches Fire Trucks)',
   cemetery: 'Cemetery (Memorials & Hearses)',
-  commercial: 'Commercial (Midday & Evening)',
+  commercial: 'Commercial (Shops & Errands)',
   park: 'Park (Weekend & Leisure)',
 };
 
@@ -957,6 +1002,7 @@ function buildOakridgePreset(): SavedMapData {
   place('flower_shop', 10, 13, 'Blossom Florist');
   place('bookshop', 22, 11, 'Maple Bookshop');
   place('tackle_shop', 19, 11, 'Riverbank Tackle');
+  place('crops', 8, 11, 'Oakridge Farm');
   place('park', 22, 13, 'Founders Square');
   place('city_hall', 23, 13, 'Oakridge City Hall');
   place('house', 26, 16, 'Loft Terrace');
@@ -1086,6 +1132,7 @@ function buildTwinBridgesPreset(): SavedMapData {
   place('bakery', 11, 13, 'Westbrook Bakery');
   place('tackle_shop', 19, 12, 'Bridge Bait & Tackle');
   place('flower_shop', 10, 13, 'River Florist');
+  place('crops', 8, 12, 'Westbrook Farm');
   place('park', 22, 17, 'Riverside Park');
   place('city_hall', 24, 14, 'Twin Bridges City Hall');
 

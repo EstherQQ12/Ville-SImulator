@@ -1,7 +1,9 @@
 interface PauseModalProps {
   isOpen: boolean;
   mapName: string;
+  justSaved: boolean;
   onResume: () => void;
+  onSaveChanges: () => void;
   onOpenMapManager: () => void;
   onReturnToTitle: () => void;
 }
@@ -9,7 +11,9 @@ interface PauseModalProps {
 export function PauseModal({
   isOpen,
   mapName,
+  justSaved,
   onResume,
+  onSaveChanges,
   onOpenMapManager,
   onReturnToTitle,
 }: PauseModalProps) {
@@ -55,6 +59,17 @@ export function PauseModal({
             className="w-full py-2.5 px-4 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold text-sm transition-colors"
           >
             Resume Simulation
+          </button>
+          <button
+            type="button"
+            onClick={onSaveChanges}
+            className={`w-full py-2.5 px-4 rounded-lg font-medium text-sm transition-colors border ${
+              justSaved
+                ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-semibold'
+                : 'bg-slate-800 hover:bg-slate-700 text-emerald-300 border-slate-700'
+            }`}
+          >
+            {justSaved ? 'Changes Saved!' : 'Save Changes'}
           </button>
           <button
             type="button"

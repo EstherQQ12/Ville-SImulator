@@ -44,9 +44,9 @@ export function TitleScreen({
         {/* Bespoke Inline SVG Title Lockup */}
         <div className="flex flex-col gap-3">
           <svg
-            viewBox="0 0 360 64"
-            className="w-72 md:w-88 h-auto"
-            aria-label="CartoVille"
+            viewBox="0 0 420 64"
+            className="w-80 md:w-[24rem] h-auto"
+            aria-label="VilleSimulator"
           >
             {/* Geometric mini city emblem */}
             <g transform="translate(0, 6)">
@@ -74,15 +74,15 @@ export function TitleScreen({
               fill="#F8FAFC"
               fontFamily="'Bricolage Grotesque', sans-serif"
               fontWeight="800"
-              fontSize="42"
-              letterSpacing="-1.2"
+              fontSize="38"
+              letterSpacing="-1"
             >
-              CartoVille
+              VilleSimulator
             </text>
           </svg>
 
           <p className="text-sm md:text-base text-slate-300 leading-relaxed max-w-md">
-            Design custom city maps, draw your own building icons, pave road networks, and watch rush-hour traffic jams unfold across a live 24-hour day-night cycle.
+            Design custom city maps, draw your own building icons, pave road networks, and watch live city traffic unfold across a 24-hour day-night cycle.
           </p>
         </div>
 

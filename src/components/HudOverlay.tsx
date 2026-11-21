@@ -1,5 +1,7 @@
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Activity,
+  Check,
   CloudLightning,
   CloudRain,
   Coins,
@@ -8,19 +10,21 @@ import {
   EyeOff,
   FolderOpen,
   Frown,
-  Grid,
+  GripVertical,
   Hand,
   Leaf,
-  MapPin,
   Meh,
   Menu,
   Moon,
   MousePointer2,
+  Music,
+  Newspaper,
   Paintbrush,
   Pause,
   Play,
   Plus,
   Route,
+  Save,
   Smile,
   Snowflake,
   Sprout,
@@ -32,9 +36,6 @@ import {
   VolumeX,
   Waves,
   X,
-  Zap,
-  ZoomIn,
-  ZoomOut,
 } from 'lucide-react';
 import {
   BuildingBlueprint,
@@ -56,8 +57,9 @@ interface HudOverlayProps {
   blueprints: BuildingBlueprint[];
   activeBlueprintId: string;
   showTrafficOverlay: boolean;
-  showGrid: boolean;
   isMuted: boolean;
+  isMusicEnabled: boolean;
+  justSaved: boolean;
   isUiHidden: boolean;
   onToggleRun: () => void;
   onSetTimeScale: (scale: number) => void;
@@ -68,14 +70,12 @@ interface HudOverlayProps {
   onDeleteBlueprint: (bpId: string) => void;
   onCreateBlueprint: () => void;
   onToggleTrafficOverlay: () => void;
-  onToggleGrid: () => void;
-  onTriggerRush: () => void;
-  onFitCamera: () => void;
-  onZoomIn: () => void;
-  onZoomOut: () => void;
   onToggleHideUi: () => void;
   onOpenMaps: () => void;
+  onSaveChanges: () => void;
+  onOpenNewspaper: () => void;
   onToggleMute: () => void;
+  onToggleMusic: () => void;
   onOpenPause: () => void;
   onFocusRobbery: () => void;
   onFocusProtest: () => void;
@@ -124,8 +124,9 @@ export function HudOverlay({
   blueprints,
   activeBlueprintId,
   showTrafficOverlay,
-  showGrid,
   isMuted,
+  isMusicEnabled,
+  justSaved,
   isUiHidden,
   onToggleRun,
   onSetTimeScale,
@@ -136,14 +137,12 @@ export function HudOverlay({
   onDeleteBlueprint,
   onCreateBlueprint,
   onToggleTrafficOverlay,
-  onToggleGrid,
-  onTriggerRush,
-  onFitCamera,
-  onZoomIn,
-  onZoomOut,
   onToggleHideUi,
   onOpenMaps,
+  onSaveChanges,
+  onOpenNewspaper,
   onToggleMute,
+  onToggleMusic,
   onOpenPause,
   onFocusRobbery,
   onFocusProtest,
@@ -154,6 +153,81 @@ export function HudOverlay({
   onCycleSeason,
   onCycleWeather,
 }: HudOverlayProps) {
+  const [topLeftOffset, setTopLeftOffset] = useState({ x: 0, y: 0 });
+  const [topRightOffset, setTopRightOffset] = useState({ x: 0, y: 0 });
+  const [bottomOffset, setBottomOffset] = useState({ x: 0, y: 0 });
+  const bottomToolbarRef = useRef<HTMLDivElement | null>(null);
+  const topRightBarRef = useRef<HTMLDivElement | null>(null);
+  const dragSessionRef = useRef<{
+    bar: 'topLeft' | 'topRight' | 'bottom';
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const attachHorizontalWheel = (el: HTMLDivElement | null) => {
+      if (!el) return () => {};
+      const onWheel = (e: WheelEvent) => {
+        if (el.scrollWidth <= el.clientWidth + 1) return;
+        const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+        if (delta !== 0) {
+          e.preventDefault();
+          e.stopPropagation();
+          el.scrollLeft += delta;
+        }
+      };
+      el.addEventListener('wheel', onWheel, { passive: false });
+      return () => el.removeEventListener('wheel', onWheel);
+    };
+    const detachBottom = attachHorizontalWheel(bottomToolbarRef.current);
+    const detachTopRight = attachHorizontalWheel(topRightBarRef.current);
+    return () => {
+      detachBottom();
+      detachTopRight();
+    };
+  }, [isUiHidden]);
+
+  const startBarDrag = (
+    bar: 'topLeft' | 'topRight' | 'bottom',
+    e: React.PointerEvent<HTMLButtonElement>
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    const current =
+      bar === 'topLeft' ? topLeftOffset : bar === 'topRight' ? topRightOffset : bottomOffset;
+    dragSessionRef.current = {
+      bar,
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: current.x,
+      origY: current.y,
+    };
+  };
+
+  const moveBarDrag = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const sess = dragSessionRef.current;
+    if (!sess) return;
+    const maxW = Math.max(200, window.innerWidth - 160);
+    const maxH = Math.max(120, window.innerHeight - 120);
+    const dx = e.clientX - sess.startX;
+    const dy = e.clientY - sess.startY;
+    const nextX = Math.max(-maxW, Math.min(maxW, sess.origX + dx));
+    const nextY = Math.max(-maxH, Math.min(maxH, sess.origY + dy));
+    if (sess.bar === 'topLeft') {
+      setTopLeftOffset({ x: Math.max(-24, nextX), y: Math.max(-16, nextY) });
+    } else if (sess.bar === 'topRight') {
+      setTopRightOffset({ x: Math.min(24, nextX), y: Math.max(-16, nextY) });
+    } else {
+      setBottomOffset({ x: Math.max(-24, nextX), y: Math.min(16, nextY) });
+    }
+  };
+
+  const endBarDrag = () => {
+    dragSessionRef.current = null;
+  };
 
   const flowStatus =
     stats.trafficFlowPercent >= 75
@@ -197,10 +271,26 @@ export function HudOverlay({
   return (
     <div className="absolute inset-0 z-20 transform-gpu pointer-events-none flex flex-col justify-between gap-2 p-2.5 sm:p-3.5 pt-[max(0.625rem,env(safe-area-inset-top))] pb-[max(0.625rem,env(safe-area-inset-bottom))] pl-[max(0.625rem,env(safe-area-inset-left))] pr-[max(0.625rem,env(safe-area-inset-right))]">
       {/* Top Perimeter Row */}
-      <div className="flex flex-wrap items-start justify-between gap-2 sm:gap-3 min-w-0">
+      <div className="flex flex-wrap xl:flex-nowrap items-start justify-between gap-2 sm:gap-3 min-w-0">
         {/* Top-Left: Time, Day-Night Cycle & Speed */}
-        <div className="pointer-events-auto flex flex-col gap-1.5 sm:gap-2 bg-[#0F172A]/95 border border-slate-700/80 rounded-xl px-3 py-2 sm:px-3.5 sm:py-2.5 shadow-lg max-w-full">
-          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        <div
+          style={{ transform: `translate3d(${topLeftOffset.x}px, ${topLeftOffset.y}px, 0)` }}
+          className="pointer-events-auto flex flex-col gap-1.5 sm:gap-2 bg-[#0F172A]/95 border border-slate-700/80 rounded-xl px-2.5 py-2 sm:px-3.5 sm:py-2.5 shadow-lg max-w-full"
+        >
+          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
+            <button
+              type="button"
+              onPointerDown={(e) => startBarDrag('topLeft', e)}
+              onPointerMove={moveBarDrag}
+              onPointerUp={endBarDrag}
+              onPointerCancel={endBarDrag}
+              onDoubleClick={() => setTopLeftOffset({ x: 0, y: 0 })}
+              title="Drag to move bar (double-click to reset)"
+              className="p-0.5 -ml-1 text-slate-500 hover:text-slate-200 cursor-grab active:cursor-grabbing touch-none shrink-0"
+              aria-label="Move clock bar"
+            >
+              <GripVertical className="w-3.5 h-3.5" />
+            </button>
             <div className="flex items-center gap-2">
               <PhaseIcon phase={stats.timePhase} />
               <span className="font-mono-tabular text-base sm:text-lg font-semibold text-white leading-none">
@@ -218,7 +308,7 @@ export function HudOverlay({
               <button
                 type="button"
                 onClick={onCycleSeason}
-                title="Season cycles every 2 days (click to preview next season)"
+                title="Season cycles every 10 days (click to preview next season)"
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/90 hover:bg-slate-700 text-slate-200 transition-colors"
               >
                 <SeasonIcon season={stats.season} />
@@ -233,8 +323,6 @@ export function HudOverlay({
                 <WeatherIcon weather={stats.weather} />
                 <span>{stats.weather}</span>
               </button>
-              <span aria-hidden="true" className="hidden sm:inline text-slate-500">·</span>
-              <span className="hidden sm:inline text-amber-300">{stats.rushPeriodLabel}</span>
             </div>
           </div>
 
@@ -289,7 +377,7 @@ export function HudOverlay({
                 type="button"
                 onClick={() => onJumpToMinutes(17 * 60 + 30)}
                 className="px-1.5 py-0.5 rounded text-slate-400 hover:text-white hover:bg-slate-800 transition-colors whitespace-nowrap"
-                title="Jump to Evening Rush Dusk (17:30)"
+                title="Jump to Dusk (17:30)"
               >
                 Dusk
               </button>
@@ -424,15 +512,48 @@ export function HudOverlay({
               >
                 {stats.activeProtests} Protest
               </button>
+            ) : stats.activeEscapees > 0 ? (
+              <button
+                type="button"
+                onClick={onFocusCityHall}
+                className="text-orange-400 font-semibold underline decoration-orange-400/60"
+              >
+                {stats.activeEscapees} Escapee
+              </button>
+            ) : stats.oceanTrashCount >= 6 ? (
+              <button
+                type="button"
+                onClick={onFocusCityHall}
+                className="text-sky-300 font-semibold underline decoration-sky-400/60"
+              >
+                {stats.oceanTrashCount} Ocean Trash
+              </button>
             ) : (
               <span>{stats.population} Citizens</span>
             )}
           </div>
         </div>
 
-        {/* Top-Right: Telemetry Readout & Utility Actions */}
-        <div className="pointer-events-auto flex items-center gap-2 sm:gap-3 bg-[#0F172A]/95 border border-slate-700/80 rounded-xl px-2.5 py-2 sm:px-3.5 sm:py-2.5 shadow-lg max-w-full overflow-x-auto touch-pan-x">
-          <div className="hidden xl:flex items-center gap-4 pr-3 border-r border-slate-800">
+        {/* Top-Right: Telemetry Readout & Compact Utility Actions */}
+        <div
+          ref={topRightBarRef}
+          style={{ transform: `translate3d(${topRightOffset.x}px, ${topRightOffset.y}px, 0)` }}
+          className="pointer-events-auto ml-auto flex items-center gap-2 bg-[#0F172A]/95 border border-slate-700/80 rounded-xl px-2.5 py-2 shadow-lg max-w-full overflow-x-auto touch-pan-x"
+        >
+          <button
+            type="button"
+            onPointerDown={(e) => startBarDrag('topRight', e)}
+            onPointerMove={moveBarDrag}
+            onPointerUp={endBarDrag}
+            onPointerCancel={endBarDrag}
+            onDoubleClick={() => setTopRightOffset({ x: 0, y: 0 })}
+            title="Drag to move bar (double-click to reset)"
+            className="p-0.5 -ml-1 text-slate-500 hover:text-slate-200 cursor-grab active:cursor-grabbing touch-none shrink-0"
+            aria-label="Move telemetry bar"
+          >
+            <GripVertical className="w-3.5 h-3.5" />
+          </button>
+          <div className="hidden xl:flex items-center gap-2.5 pr-2.5 border-r border-slate-800">
             <div title={stats.happinessSummary} className="cursor-help">
               <div className="text-[10px] text-slate-400">Mood</div>
               <div className={`flex items-center gap-1 font-mono-tabular text-sm font-semibold ${moodColor} whitespace-nowrap`}>
@@ -462,19 +583,19 @@ export function HudOverlay({
                 {stats.population}
               </div>
             </div>
-            <div>
+            <div className="hidden 2xl:block">
               <div className="text-[10px] text-slate-400">Active Cars</div>
               <div className="font-mono-tabular text-sm font-semibold text-white">
                 {stats.activeCars}
               </div>
             </div>
-            <div>
-              <div className="text-[10px] text-slate-400">Traffic Flow</div>
+            <div className="whitespace-nowrap">
+              <div className="text-[10px] text-slate-400">Traffic</div>
               <div className={`font-mono-tabular text-sm font-semibold ${flowStatus.color}`}>
                 {stats.trafficFlowPercent}% · {flowStatus.label}
               </div>
             </div>
-            <div>
+            <div className="hidden 2xl:block">
               <div className="text-[10px] text-slate-400">Jammed</div>
               <div
                 className={`font-mono-tabular text-sm font-semibold ${
@@ -484,7 +605,7 @@ export function HudOverlay({
                 {stats.jammedCars}
               </div>
             </div>
-            <div>
+            <div className="hidden 2xl:block">
               <div className="text-[10px] text-slate-400">Districts</div>
               <div className="font-mono-tabular text-sm font-semibold text-white">
                 {stats.neighbourhoodsCount}
@@ -600,6 +721,24 @@ export function HudOverlay({
                 >
                   {stats.activeProtests} Protest
                 </button>
+              ) : stats.activeEscapees > 0 ? (
+                <button
+                  type="button"
+                  onClick={onFocusCityHall}
+                  title="Prisoner escaped — Police pursuing!"
+                  className="font-mono-tabular text-sm font-semibold text-orange-400 hover:text-orange-300 underline decoration-orange-400/60 cursor-pointer whitespace-nowrap"
+                >
+                  {stats.activeEscapees} Escapee
+                </button>
+              ) : stats.oceanTrashCount >= 6 ? (
+                <button
+                  type="button"
+                  onClick={onFocusCityHall}
+                  title="Trash accumulating in ocean water — cleaners dispatched soon"
+                  className="font-mono-tabular text-sm font-semibold text-sky-300 hover:text-sky-200 underline decoration-sky-400/60 cursor-pointer whitespace-nowrap"
+                >
+                  {stats.oceanTrashCount} Ocean Trash
+                </button>
               ) : (
                 <div className="font-mono-tabular text-sm font-semibold text-emerald-400">
                   Calm
@@ -611,42 +750,36 @@ export function HudOverlay({
           <div className="flex items-center gap-1 shrink-0">
             <button
               type="button"
-              onClick={onTriggerRush}
-              title="Dispatch Rush Hour Wave"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-amber-300 transition-colors whitespace-nowrap shrink-0"
+              onClick={onOpenNewspaper}
+              title={stats.dailyNewsHeadline}
+              className="relative flex items-center gap-1 px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-stone-100 transition-colors whitespace-nowrap shrink-0"
             >
-              <Zap className="w-3.5 h-3.5" />
-              Rush
+              <Newspaper className="w-3.5 h-3.5 text-amber-300" />
+              <span className="hidden sm:inline">News</span>
+              {stats.unreadNewsCount > 0 && (
+                <span className="ml-0.5 px-1 py-0 rounded bg-amber-400 text-slate-950 font-mono-tabular text-[10px] font-bold leading-tight">
+                  {stats.unreadNewsCount}
+                </span>
+              )}
             </button>
             <button
               type="button"
-              onClick={onZoomOut}
-              title="Zoom Out"
-              className="p-2 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors shrink-0"
+              onClick={onSaveChanges}
+              title="Save city map changes to browser storage"
+              className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                justSaved
+                  ? 'bg-emerald-500 text-slate-950 font-semibold'
+                  : 'bg-slate-800 hover:bg-slate-700 text-emerald-300'
+              }`}
             >
-              <ZoomOut className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={onZoomIn}
-              title="Zoom In"
-              className="p-2 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors shrink-0"
-            >
-              <ZoomIn className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={onFitCamera}
-              title="Center & Fit Map"
-              className="p-2 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors shrink-0"
-            >
-              <MapPin className="w-4 h-4" />
+              {justSaved ? <Check className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}
+              <span className="hidden sm:inline">{justSaved ? 'Saved!' : 'Save'}</span>
             </button>
             <button
               type="button"
               onClick={onToggleTrafficOverlay}
               title="Toggle Traffic Congestion Heatmap (T)"
-              className={`p-2 rounded-lg transition-colors shrink-0 ${
+              className={`p-1.5 rounded-lg transition-colors shrink-0 ${
                 showTrafficOverlay
                   ? 'bg-amber-400 text-slate-950'
                   : 'text-slate-300 hover:bg-slate-800'
@@ -656,27 +789,29 @@ export function HudOverlay({
             </button>
             <button
               type="button"
-              onClick={onToggleGrid}
-              title="Toggle Grid Lines"
-              className={`p-2 rounded-lg transition-colors shrink-0 ${
-                showGrid ? 'bg-slate-700 text-white' : 'text-slate-300 hover:bg-slate-800'
-              }`}
-            >
-              <Grid className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
               onClick={onOpenMaps}
               title="Save / Load Maps"
-              className="p-2 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors shrink-0"
+              className="p-1.5 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors shrink-0"
             >
               <FolderOpen className="w-4 h-4" />
             </button>
             <button
               type="button"
+              onClick={onToggleMusic}
+              title={isMusicEnabled ? 'Pause Lo-Fi Music' : 'Play Warm Lo-Fi Music'}
+              className={`p-1.5 rounded-lg transition-colors shrink-0 ${
+                isMusicEnabled
+                  ? 'bg-teal-500/20 text-teal-300 border border-teal-500/50'
+                  : 'text-slate-300 hover:bg-slate-800'
+              }`}
+            >
+              <Music className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
               onClick={onToggleMute}
               title={isMuted ? 'Unmute Sound' : 'Mute Sound'}
-              className="p-2 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors shrink-0"
+              className="p-1.5 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors shrink-0"
             >
               {isMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4" />}
             </button>
@@ -693,7 +828,7 @@ export function HudOverlay({
               type="button"
               onClick={onOpenPause}
               title="Menu (Esc)"
-              className="p-2 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors shrink-0"
+              className="p-1.5 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors shrink-0"
             >
               <Menu className="w-4 h-4" />
             </button>
@@ -701,9 +836,26 @@ export function HudOverlay({
         </div>
       </div>
 
-      {/* Bottom-Center: Map Builder & Custom Plot Dock */}
-      <div className="flex justify-center w-full min-w-0">
-        <div className="pointer-events-auto max-w-full overflow-x-auto touch-pan-x flex items-center gap-2 bg-[#0F172A]/95 border border-slate-700/80 rounded-xl px-3 py-2 shadow-xl">
+      {/* Bottom-Left Compact Dock (Keeps Bottom-Right Corner Empty & Unobstructed) */}
+      <div className="flex justify-start w-full min-w-0 pr-40 sm:pr-48">
+        <div
+          ref={bottomToolbarRef}
+          style={{ transform: `translate3d(${bottomOffset.x}px, ${bottomOffset.y}px, 0)` }}
+          className="pointer-events-auto max-w-full overflow-x-auto touch-pan-x flex items-center gap-1.5 bg-[#0F172A]/95 border border-slate-700/80 rounded-xl px-2.5 py-1.5 shadow-xl"
+        >
+          <button
+            type="button"
+            onPointerDown={(e) => startBarDrag('bottom', e)}
+            onPointerMove={moveBarDrag}
+            onPointerUp={endBarDrag}
+            onPointerCancel={endBarDrag}
+            onDoubleClick={() => setBottomOffset({ x: 0, y: 0 })}
+            title="Drag to move toolbar (double-click to reset)"
+            className="p-0.5 text-slate-500 hover:text-slate-200 cursor-grab active:cursor-grabbing touch-none shrink-0"
+            aria-label="Move build toolbar"
+          >
+            <GripVertical className="w-3.5 h-3.5" />
+          </button>
           {/* Core Map Tools */}
           <div className="flex items-center gap-1 pr-2 border-r border-slate-800 shrink-0">
             <button

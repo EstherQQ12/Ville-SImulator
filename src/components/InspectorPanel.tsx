@@ -12,6 +12,7 @@ import {
   PartyPopper,
   ShieldAlert,
   Sparkles,
+  Sprout,
   Store,
   Swords,
   Trash2,
@@ -419,7 +420,7 @@ export function InspectorPanel({
               </div>
             </div>
             <div className="text-[11px] text-slate-400">
-              Houses captured robbers, protesters &amp; illicit offenders; inmates are periodically released.
+              Houses captured robbers, protesters &amp; illicit offenders; inmates may occasionally escape or get released.
             </div>
           </div>
         )}
@@ -431,6 +432,18 @@ export function InspectorPanel({
               <div className="font-semibold text-white">Industrial Plant</div>
               <div className="text-[11px] text-slate-400">
                 Boosts city economy &amp; dispatches delivery vans, while smokestacks gradually increase air pollution.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {b.category === 'crops' && (
+          <div className="flex items-start gap-2 text-xs bg-slate-900/80 border border-slate-800 rounded-lg px-2.5 py-2 mb-3 text-slate-200">
+            <Sprout className="w-4 h-4 text-lime-400 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <div className="font-semibold text-white">Crops &amp; Farm Plot</div>
+              <div className="text-[11px] text-slate-400">
+                Produces fresh harvests, dispatches produce delivery vans, and boosts the city&apos;s food supply &amp; economy.
               </div>
             </div>
           </div>
@@ -762,6 +775,8 @@ export function InspectorPanel({
       ? 'Clothes Market Stall'
       : stall.goods === 'produce'
       ? 'Produce Market Stall'
+      : stall.goods === 'kayak'
+      ? 'Kayak Rental Stand'
       : 'Handmade Crafts Stall';
     return (
       <div className="pointer-events-auto w-72 bg-[#0F172A]/95 border border-slate-700/80 rounded-xl shadow-xl p-3.5 text-slate-100">

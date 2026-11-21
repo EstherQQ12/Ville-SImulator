@@ -12,7 +12,7 @@ import {
   TILE_SIZE,
   ToolMode,
 } from '../types/game';
-import { getRoadMask, isHighwayTile, isIntersectionTile } from './pathfinding';
+import { getEffectiveRoadMask, isHighwayTile, isIntersectionTile } from './pathfinding';
 import { CitySimulation } from './simulation';
 
 export interface CameraState {
@@ -232,12 +232,14 @@ export function renderSimulation(
     for (let x = minX; x <= maxX; x++) {
       const tile = sim.tiles[y * GRID_COLS + x];
       if (!tile.building) continue;
-      drawBuildingTile(ctx, sim, tile, shadowOffsetX, shadowOffsetY);
+      drawBuildingTile(ctx, sim, tile, shadowOffsetX, shadowOffsetY, wallTimeSeconds);
     }
   }
 
-  // 3.5 Render Felled Tree Stumps & Pop-up Market Stalls
+  // 3.5 Render Felled Tree Stumps, Trash Items, Porch Newspapers & Pop-up Market Stalls
   drawChoppedTreeEvents(ctx, sim);
+  drawTrashItems(ctx, sim, wallTimeSeconds);
+  drawPorchPapers(ctx, sim);
   drawMarketStalls(ctx, sim, wallTimeSeconds);
 
   // 4. Render Cars & Crashes
@@ -722,6 +724,54 @@ function drawMarketStalls(
       ctx.beginPath();
       ctx.arc(cx + 6, cy - 2.5, 2.1, 0, Math.PI * 2);
       ctx.fill();
+    } else if (stall.goods === 'kayak') {
+      // Twin miniature kayaks on shore rack with paddles
+      ctx.fillStyle = '#06B6D4';
+      ctx.beginPath();
+      ctx.ellipse(cx - 4.5, cy - 2.6, 5.2, 1.8, -0.1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#F59E0B';
+      ctx.beginPath();
+      ctx.ellipse(cx + 4.5, cy - 2.6, 5.2, 1.8, 0.1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#F8FAFC';
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(cx - 9, cy - 4.2);
+      ctx.lineTo(cx + 9, cy - 4.2);
+      ctx.stroke();
+    } else if (stall.goods === 'rowboat') {
+      // Wooden rowboat hull + crossed oars on stand
+      ctx.fillStyle = '#92400E';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy - 2.4, 7.2, 2.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#D97706';
+      ctx.fillRect(cx - 3.5, cy - 3.2, 7, 1.6);
+      ctx.strokeStyle = '#FEF3C7';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx - 6, cy - 5);
+      ctx.lineTo(cx + 6, cy - 1);
+      ctx.moveTo(cx + 6, cy - 5);
+      ctx.lineTo(cx - 6, cy - 1);
+      ctx.stroke();
+    } else if (stall.goods === 'swim') {
+      // Lifebuoy ring + beach swim floats
+      ctx.strokeStyle = '#EF4444';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.arc(cx - 4.5, cy - 2.8, 3, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = '#F8FAFC';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(cx - 4.5, cy - 2.8, 3, 0, Math.PI * 0.5);
+      ctx.stroke();
+      ctx.fillStyle = '#38BDF8';
+      ctx.beginPath();
+      ctx.arc(cx + 4.5, cy - 2.8, 2.7, 0, Math.PI * 2);
+      ctx.fill();
     } else {
       // Handcrafted pottery & woven goods
       ctx.fillStyle = '#F59E0B';
@@ -769,6 +819,12 @@ function drawMarketStalls(
       ? 'CLOTHES'
       : stall.goods === 'produce'
       ? 'PRODUCE'
+      : stall.goods === 'kayak'
+      ? 'KAYAK'
+      : stall.goods === 'rowboat'
+      ? 'ROWING'
+      : stall.goods === 'swim'
+      ? 'SWIM CLUB'
       : 'CRAFTS';
     ctx.font = '700 7px "Plus Jakarta Sans", sans-serif';
     const tw = ctx.measureText(tag).width + 6;
@@ -869,7 +925,7 @@ function drawRoadTile(
 ) {
   const wx = tile.x * TILE_SIZE;
   const wy = tile.y * TILE_SIZE;
-  const mask = getRoadMask(sim.tiles, tile.x, tile.y);
+  const mask = getEffectiveRoadMask(sim.tiles, tile.x, tile.y);
   const roadW = 34;
   const pad = (TILE_SIZE - roadW) / 2; // 7px curb margin
   const mid = TILE_SIZE / 2;
@@ -1140,7 +1196,8 @@ function drawBuildingTile(
   sim: CitySimulation,
   tile: MapTile,
   shadowOffsetX: number,
-  shadowOffsetY: number
+  shadowOffsetY: number,
+  wallTimeSeconds: number
 ) {
   const bld = tile.building;
   if (!bld) return;
@@ -1156,11 +1213,16 @@ function drawBuildingTile(
     return;
   }
 
-  // Lot concrete/garden base
+  // Lot concrete/garden/soil base
   ctx.fillStyle = 'rgba(15, 23, 42, 0.16)';
   ctx.fillRect(wx + 4 + shadowOffsetX * 0.45, wy + 4 + shadowOffsetY * 0.45, TILE_SIZE - 8, TILE_SIZE - 8);
 
-  ctx.fillStyle = bld.category === 'park' ? '#3B7A46' : '#CBD5E1';
+  ctx.fillStyle =
+    bld.category === 'park'
+      ? '#3B7A46'
+      : bld.category === 'crops'
+      ? '#5B8A3C'
+      : '#CBD5E1';
   ctx.fillRect(wx + 4, wy + 4, TILE_SIZE - 8, TILE_SIZE - 8);
 
   // Crisp pixel-art building icon
@@ -1168,6 +1230,92 @@ function drawBuildingTile(
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(cached.dayCanvas, wx + 4, wy + 4, TILE_SIZE - 8, TILE_SIZE - 8);
   ctx.imageSmoothingEnabled = true;
+
+  // Animated swaying golden wheat/corn stalks on Crops plots (except deep snow winter)
+  if (bld.category === 'crops') {
+    ctx.save();
+    const sway = Math.sin(wallTimeSeconds * 2.4 + tile.x * 0.8 + tile.y * 0.5) * 1.6;
+    ctx.strokeStyle = sim.season === 'Winter' ? '#E2E8F0' : sim.season === 'Spring' ? '#84CC16' : '#FACC15';
+    ctx.lineWidth = 1.4;
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 4; col++) {
+        const sx = wx + 11 + col * 8.5;
+        const sy = wy + 18 + row * 9;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + sway, sy - 5.5);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+}
+
+function drawTrashItems(
+  ctx: CanvasRenderingContext2D,
+  sim: CitySimulation,
+  wallTimeSeconds: number
+) {
+  if (sim.trashItems.length === 0) return;
+  ctx.save();
+  for (const tr of sim.trashItems) {
+    const bob = tr.inWater ? Math.sin(wallTimeSeconds * 2.8 + tr.x + tr.y) * 1.4 : 0;
+    const x = tr.wx;
+    const y = tr.wy + bob;
+
+    if (tr.inWater) {
+      // Water ripple around floating ocean trash
+      ctx.strokeStyle = 'rgba(224, 242, 254, 0.55)';
+      ctx.lineWidth = 0.8;
+      ctx.beginPath();
+      ctx.ellipse(x, y + 1, 5.2, 2.3, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.22)';
+      ctx.beginPath();
+      ctx.ellipse(x, y + 1.5, 3.6, 1.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    if (tr.kind === 'bottle') {
+      ctx.fillStyle = '#38BDF8';
+      ctx.fillRect(x - 1.5, y - 2.6, 3, 4.6);
+      ctx.fillStyle = '#EF4444';
+      ctx.fillRect(x - 1, y - 3.6, 2, 1.1);
+    } else if (tr.kind === 'can') {
+      ctx.fillStyle = '#CBD5E1';
+      ctx.fillRect(x - 1.8, y - 1.8, 3.6, 3);
+      ctx.fillStyle = '#DC2626';
+      ctx.fillRect(x - 1.8, y - 0.6, 3.6, 1.1);
+    } else if (tr.kind === 'bag') {
+      ctx.fillStyle = '#F8FAFC';
+      ctx.beginPath();
+      ctx.arc(x, y - 0.5, 2.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#94A3B8';
+      ctx.fillRect(x - 1.4, y - 2.2, 2.8, 0.8);
+    } else {
+      ctx.fillStyle = '#FACC15';
+      ctx.fillRect(x - 2.2, y - 1.4, 4.4, 2.4);
+    }
+  }
+  ctx.restore();
+}
+
+function drawPorchPapers(ctx: CanvasRenderingContext2D, sim: CitySimulation) {
+  if (sim.porchPapers.length === 0) return;
+  ctx.save();
+  for (const pp of sim.porchPapers) {
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
+    ctx.fillRect(pp.wx - 3.2, pp.wy - 1.2, 7.4, 4.8);
+    ctx.fillStyle = '#F8FAFC';
+    ctx.fillRect(pp.wx - 3.6, pp.wy - 2, 7.2, 4.4);
+    ctx.fillStyle = '#1E293B';
+    ctx.fillRect(pp.wx - 2.8, pp.wy - 1.3, 5.6, 1.1);
+    ctx.fillStyle = '#94A3B8';
+    ctx.fillRect(pp.wx - 2.8, pp.wy + 0.5, 3.6, 0.9);
+  }
+  ctx.restore();
 }
 
 function drawCar(ctx: CanvasRenderingContext2D, car: Car, nightFactor: number) {
@@ -1845,6 +1993,166 @@ function drawPersonSprite(
   season: SeasonType,
   isRaining: boolean
 ) {
+  // Hostile Armored Tank unit during invasions
+  if (p.role === 'invader' && p.hasTank) {
+    ctx.save();
+    ctx.translate(p.wx, p.wy);
+    const angle = Math.atan2(p.targetWy - p.wy, p.targetWx - p.wx);
+    ctx.save();
+    ctx.rotate(angle);
+    // Tank shadow
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.35)';
+    ctx.fillRect(-10, -7, 21, 16);
+    // Heavy caterpillar treads
+    ctx.fillStyle = '#1E293B';
+    ctx.fillRect(-10.5, -8, 21, 3.2);
+    ctx.fillRect(-10.5, 4.8, 21, 3.2);
+    // Olive-slate armored hull
+    ctx.fillStyle = '#3F4D36';
+    ctx.fillRect(-8.5, -5.8, 17, 11.6);
+    ctx.strokeStyle = '#7F1D1D';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-8.5, -5.8, 17, 11.6);
+    // Cannon turret + barrel
+    ctx.fillStyle = '#4B5E3F';
+    ctx.beginPath();
+    ctx.arc(-1, 0, 4.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1E293B';
+    ctx.fillRect(2, -1.2, 11, 2.4);
+    ctx.fillStyle = '#DC2626';
+    ctx.fillRect(-2.5, -1.5, 3, 3);
+    ctx.restore();
+
+    // Armor health pips above tank
+    const hp = p.health ?? 3;
+    const pipCount = Math.max(3, hp);
+    const totalW = pipCount * 4.2;
+    for (let h = 0; h < pipCount; h++) {
+      ctx.fillStyle = h < hp ? '#EF4444' : '#334155';
+      ctx.fillRect(-totalW / 2 + h * 4.4, -12.5, 3.4, 2.2);
+    }
+    ctx.restore();
+    return;
+  }
+
+  // Floating/paddling Kayaker, Rower, or Swimmer on water
+  if (p.role === 'kayaker' && p.state === 'kayaking') {
+    ctx.save();
+    ctx.translate(p.wx, p.wy);
+    const act = p.waterActivity || 'kayak';
+
+    if (act === 'swim') {
+      // Front-crawl swimmer with splashing water ripples & goggles
+      const stroke = Math.sin(p.animPhase * 1.4);
+      ctx.strokeStyle = 'rgba(224, 242, 254, 0.85)';
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.ellipse(0, 1.5, 7 + Math.abs(stroke) * 2.5, 3.6, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // Torso submerged horizontally
+      ctx.fillStyle = p.shirtColor;
+      ctx.fillRect(-3.8, -1.2, 6.2, 3.4);
+      // Animated reaching swim arms
+      ctx.strokeStyle = '#FDBA74';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(0, -1);
+      ctx.lineTo(4.2, -3.5 + stroke * 3);
+      ctx.moveTo(0, 1.5);
+      ctx.lineTo(-3.5, 3.6 - stroke * 2.8);
+      ctx.stroke();
+      // Swim cap + goggles
+      ctx.fillStyle = p.hatColor || '#F43F5E';
+      ctx.beginPath();
+      ctx.arc(3.5, -0.4, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#38BDF8';
+      ctx.fillRect(4.3, -1.3, 1.8, 1.3);
+      ctx.restore();
+      return;
+    }
+
+    if (act === 'rowing') {
+      // Classic wooden rowboat hull with twin side oars & wake rings
+      const rowPull = Math.sin(p.animPhase * 0.9) * 0.6;
+      ctx.strokeStyle = 'rgba(224, 242, 254, 0.72)';
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.ellipse(0, 3.2, 12.2, 4.8, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      // Boat hull
+      ctx.fillStyle = '#92400E';
+      ctx.beginPath();
+      ctx.ellipse(0, 1.6, 10.6, 4.1, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#FEF3C7';
+      ctx.beginPath();
+      ctx.ellipse(0, 1.3, 7.6, 2.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // Wooden thwart bench + seated rower
+      ctx.fillStyle = '#78350F';
+      ctx.fillRect(-1.8, -0.8, 3.6, 4.4);
+      ctx.fillStyle = p.shirtColor;
+      ctx.fillRect(-2.4, -4.4, 4.8, 4.8);
+      ctx.fillStyle = '#FDBA74';
+      ctx.beginPath();
+      ctx.arc(0, -6.5, 2.3, 0, Math.PI * 2);
+      ctx.fill();
+      // Twin synchronized side oars
+      ctx.strokeStyle = '#78350F';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(-1, -1.5);
+      ctx.lineTo(-4 + rowPull * 5, -7.2);
+      ctx.moveTo(1, 2.8);
+      ctx.lineTo(-2 + rowPull * 5, 8.6);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+
+    const paddleAngle = Math.sin(p.animPhase) * 0.55;
+    // Water wake ripples
+    ctx.strokeStyle = 'rgba(224, 242, 254, 0.7)';
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.ellipse(0, 3, 10.5, 4.2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    // Bright kayak hull
+    ctx.fillStyle = p.shirtColor === '#06B6D4' ? '#F59E0B' : '#06B6D4';
+    ctx.beginPath();
+    ctx.ellipse(0, 1.5, 9.5, 3.3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#0F172A';
+    ctx.beginPath();
+    ctx.ellipse(0, 1.2, 4, 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Seated kayaker torso + head
+    ctx.fillStyle = p.shirtColor;
+    ctx.fillRect(-2.6, -4.5, 5.2, 5.2);
+    ctx.fillStyle = '#FDBA74';
+    ctx.beginPath();
+    ctx.arc(0, -6.8, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    // Sweeping double-bladed paddle
+    ctx.save();
+    ctx.translate(0, -2.5);
+    ctx.rotate(paddleAngle);
+    ctx.strokeStyle = '#78350F';
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(-8, 0);
+    ctx.lineTo(8, 0);
+    ctx.stroke();
+    ctx.fillStyle = '#FACC15';
+    ctx.fillRect(-9.5, -1.2, 2.4, 2.4);
+    ctx.fillRect(7.1, -1.2, 2.4, 2.4);
+    ctx.restore();
+    ctx.restore();
+    return;
+  }
+
   const bob =
     p.role === 'celebrant'
       ? Math.abs(Math.sin(p.animPhase)) * 2.3
@@ -1853,7 +2161,11 @@ function drawPersonSprite(
         p.state === 'returning' ||
         p.state === 'protesting' ||
         p.state === 'patrolling' ||
-        p.state === 'invading'
+        p.state === 'invading' ||
+        p.state === 'escaping' ||
+        p.state === 'delivering' ||
+        p.state === 'building' ||
+        p.state === 'field_trip'
       ? Math.abs(Math.sin(p.animPhase)) * 1.8
       : 0;
 
@@ -1894,6 +2206,17 @@ function drawPersonSprite(
     ctx.stroke();
   }
 
+  // Skateboard deck & tiny wheels under skaters
+  if (p.role === 'hobbyist' && p.hobbyKind === 'skateboarding' && p.state === 'doing_hobby') {
+    ctx.fillStyle = '#0F172A';
+    ctx.fillRect(-5.2, 2.2, 10.4, 2.1);
+    ctx.fillStyle = '#F43F5E';
+    ctx.fillRect(-4.4, 2.5, 8.8, 1.3);
+    ctx.fillStyle = '#FACC15';
+    ctx.fillRect(-4, 4.2, 1.6, 1.2);
+    ctx.fillRect(2.4, 4.2, 1.6, 1.2);
+  }
+
   const bodyY = -bob;
 
   // Legs (or skates in Winter ice skating)
@@ -1903,7 +2226,9 @@ function drawPersonSprite(
     p.state === 'chasing' ||
     p.state === 'returning' ||
     p.state === 'patrolling' ||
-    p.state === 'invading'
+    p.state === 'invading' ||
+    p.state === 'escaping' ||
+    p.state === 'delivering'
       ? Math.sin(p.animPhase) * 1.4
       : 0;
   ctx.fillRect(-2.2, bodyY + 0.5, 1.8, 3 + stride * 0.4);
@@ -1966,10 +2291,29 @@ function drawPersonSprite(
   } else if (p.role === 'cleaner') {
     ctx.fillStyle = '#FACC15';
     ctx.fillRect(-2.8, bodyY - 3.6, 5.6, 1.2);
-  } else if (p.role === 'repairer') {
+  } else if (p.role === 'repairer' || p.role === 'builder') {
     ctx.fillStyle = '#FEF08A';
     ctx.fillRect(-2.6, bodyY - 4.4, 1.2, 4.4);
     ctx.fillRect(1.4, bodyY - 4.4, 1.2, 4.4);
+  } else if (p.role === 'escapee') {
+    // Bright orange jumpsuit with dark horizontal prison stripes
+    ctx.fillStyle = '#F97316';
+    ctx.fillRect(-3.4, bodyY - 5, 6.8, 6);
+    ctx.fillStyle = '#1E293B';
+    ctx.fillRect(-3.4, bodyY - 3.6, 6.8, 1);
+    ctx.fillRect(-3.4, bodyY - 1.4, 6.8, 1);
+  } else if (p.role === 'paperboy') {
+    // Courier satchel strap
+    ctx.strokeStyle = '#78350F';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(-2.8, bodyY - 4.5);
+    ctx.lineTo(2.8, bodyY + 0.4);
+    ctx.stroke();
+  } else if (p.role === 'student') {
+    // School backpack straps
+    ctx.fillStyle = '#0284C7';
+    ctx.fillRect(-3.8, bodyY - 4.2, 1.2, 4);
   }
 
   // Head
@@ -2125,13 +2469,30 @@ function drawPersonSprite(
     ctx.fillRect(-3.1, bodyY - 10.3, 6.2, 1.8);
     ctx.fillStyle = '#FACC15';
     ctx.fillRect(0.2, bodyY - 9.8, 3.2, 0.9);
-  } else if (p.role === 'repairer') {
-    // Yellow engineer hard hat
+  } else if (p.role === 'repairer' || p.role === 'builder') {
+    // Yellow engineer / builder hard hat
     ctx.fillStyle = '#FACC15';
     ctx.beginPath();
     ctx.arc(0, bodyY - 8.3, 3.1, Math.PI, 0);
     ctx.fill();
     ctx.fillRect(-3.6, bodyY - 8.9, 7.2, 1.2);
+  } else if (p.role === 'paperboy') {
+    // Classic flat brown newsboy cap
+    ctx.fillStyle = '#78350F';
+    ctx.fillRect(-3.1, bodyY - 10.3, 6.2, 1.8);
+    ctx.fillStyle = '#451A03';
+    ctx.fillRect(0.2, bodyY - 9.8, 3.5, 0.9);
+  } else if (p.role === 'student' && p.hatColor) {
+    ctx.fillStyle = p.hatColor;
+    ctx.beginPath();
+    ctx.arc(0, bodyY - 8.4, 2.5, Math.PI, 0);
+    ctx.fill();
+  } else if (p.role === 'escapee') {
+    // No hat + bright red alert indicator
+    ctx.fillStyle = '#EF4444';
+    ctx.beginPath();
+    ctx.arc(0, bodyY - 12.6, 1.7, 0, Math.PI * 2);
+    ctx.fill();
   } else if (p.isIllicitVendor || p.isShadyBuyer) {
     // Dark suspicious hoodie/cap for illicit vendors & secret buyers
     ctx.fillStyle = '#1E1B4B';
@@ -2522,7 +2883,61 @@ function drawPersonSprite(
       ctx.moveTo(7.6, -0.5);
       ctx.lineTo(8.6, -2.2);
       ctx.stroke();
+    } else if (p.hobbyKind === 'bird_feeding') {
+      // Golden seed crumbs & two tiny pecking songbirds
+      ctx.fillStyle = '#FDE047';
+      ctx.fillRect(4.5, 1.8, 1.3, 1.1);
+      ctx.fillRect(6.8, 2.2, 1.2, 1);
+      ctx.fillRect(8.5, 1.7, 1.2, 1);
+      const peck = Math.abs(Math.sin(wallTimeSeconds * 7 + p.animPhase)) * 1.1;
+      ctx.fillStyle = '#38BDF8';
+      ctx.beginPath();
+      ctx.ellipse(6.5, 0.8 + peck * 0.5, 1.9, 1.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#F59E0B';
+      ctx.beginPath();
+      ctx.ellipse(10, 1.2 - peck * 0.4, 1.8, 1.2, 0, 0, Math.PI * 2);
+      ctx.fill();
     }
+  } else if (p.role === 'paperboy') {
+    // Rolled crisp white morning newspaper in hand
+    ctx.fillStyle = '#F8FAFC';
+    ctx.fillRect(2.8, bodyY - 4.4, 4.2, 2.2);
+    ctx.fillStyle = '#1E293B';
+    ctx.fillRect(3.2, bodyY - 4, 3.2, 0.7);
+  } else if (p.role === 'kayaker') {
+    if (p.waterActivity === 'swim') {
+      // Bright swim ring / floatie carried on walk to water
+      ctx.strokeStyle = '#F43F5E';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(3.2, bodyY - 2, 2.4, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      // Carrying kayak paddle or wooden rowing oar upright on shore walk
+      ctx.strokeStyle = '#78350F';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(3.2, bodyY + 1);
+      ctx.lineTo(3.2, bodyY - 12);
+      ctx.stroke();
+      ctx.fillStyle = p.waterActivity === 'rowing' ? '#D97706' : '#06B6D4';
+      ctx.fillRect(2, bodyY - 13, 2.4, 2.2);
+    }
+  } else if (p.role === 'builder') {
+    const swing = p.state === 'building' ? Math.sin(p.animPhase) * 0.9 : -0.3;
+    ctx.save();
+    ctx.translate(2.5, bodyY - 3);
+    ctx.rotate(swing);
+    ctx.strokeStyle = '#78350F';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(4.8, -4.8);
+    ctx.stroke();
+    ctx.fillStyle = '#CBD5E1';
+    ctx.fillRect(3.6, -6.5, 3, 2.2);
+    ctx.restore();
   } else if (p.role === 'beggar' && p.state === 'begging') {
     // Small cardboard sign & coin cup
     ctx.fillStyle = '#D6D3D1';
@@ -2697,6 +3112,15 @@ function drawPersonSprite(
       ctx.textBaseline = 'middle';
       ctx.fillText('MAYOR', 0, bodyY - 17);
     }
+  }
+
+  // Panic exclamation badge during war flight
+  if (p.isPanicking) {
+    ctx.font = '800 9px "Plus Jakarta Sans", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#DC2626';
+    ctx.fillText('!', 0, bodyY - 15.5);
   }
 
   // Open colorful umbrella during Rain or Storm

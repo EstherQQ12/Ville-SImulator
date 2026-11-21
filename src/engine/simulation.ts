@@ -29,9 +29,11 @@ import {
   MarketStall,
   MayorSpeech,
   Neighbourhood,
+  NewspaperEdition,
   NukeBlast,
   Person,
   PlacedBuilding,
+  PorchPaperProp,
   ProtestIncident,
   RoadIntersectionConfig,
   RobberyIncident,
@@ -46,6 +48,7 @@ import {
   TerrainType,
   TILE_SIZE,
   TimePhase,
+  TrashItem,
   VehicleType,
   WeatherType,
   WoodChipParticle,
@@ -129,6 +132,12 @@ export class CitySimulation {
   public snowballs: SnowballProjectile[] = [];
   public snowmen: SnowmanProp[] = [];
   public brokenBridges: BrokenBridgeIncident[] = [];
+  public trashItems: TrashItem[] = [];
+  public porchPapers: PorchPaperProp[] = [];
+  public newspapers: NewspaperEdition[] = [];
+  public unreadNewsCount = 0;
+  public dailyHighlights: string[] = [];
+  private lastMorningPaperDay = 0;
   public crises: CityCrisisState = {
     virusActive: false,
     virusRemaining: 0,
@@ -217,11 +226,17 @@ export class CitySimulation {
   private fireCheckAccumulator = 24;
   private speechCheckAccumulator = 18;
   private planterCheckAccumulator = 12;
-  private crashCheckAccumulator = 18;
+  private crashCheckAccumulator = 0;
   private bridgeBreakAccumulator = 36;
   private zzzAccumulator = 0;
   private sadIndoorAccumulator = 0;
   private factorySmokeAccumulator = 0;
+  private litterCheckAccumulator = 6;
+  private escapeeCheckAccumulator = 24;
+  private prisonBreakAccumulator = 18;
+  private fieldTripAccumulator = 14;
+  private citizenBuildAccumulator = 40;
+  private kayakerAccumulator = 8;
   private lastFestivalDay = -3;
   private lastCeremonyDay = -3;
   private deforestationPressure = 0;
@@ -243,6 +258,9 @@ export class CitySimulation {
   private brokenBridgeIdCounter = 1;
   private snowballIdCounter = 1;
   private snowmanIdCounter = 1;
+  private trashIdCounter = 1;
+  private paperIdCounter = 1;
+  private newsIdCounter = 1;
   private roadTilesCount = 0;
   private buildingsList: PlacedBuilding[] = [];
 
@@ -278,6 +296,12 @@ export class CitySimulation {
     this.snowballs = [];
     this.snowmen = [];
     this.brokenBridges = [];
+    this.trashItems = [];
+    this.porchPapers = [];
+    this.newspapers = [];
+    this.unreadNewsCount = 0;
+    this.dailyHighlights = [];
+    this.lastMorningPaperDay = 1;
     this.crises = {
       virusActive: false,
       virusRemaining: 0,
@@ -330,11 +354,16 @@ export class CitySimulation {
     this.fireCheckAccumulator = 24;
     this.speechCheckAccumulator = 18;
     this.planterCheckAccumulator = 12;
-    this.crashCheckAccumulator = 18;
+    this.crashCheckAccumulator = 0;
     this.bridgeBreakAccumulator = 36;
     this.zzzAccumulator = 0;
     this.sadIndoorAccumulator = 0;
     this.factorySmokeAccumulator = 0;
+    this.litterCheckAccumulator = 6;
+    this.escapeeCheckAccumulator = 24;
+    this.fieldTripAccumulator = 14;
+    this.citizenBuildAccumulator = 40;
+    this.kayakerAccumulator = 8;
     this.lastFestivalDay = -3;
     this.lastCeremonyDay = -3;
     this.dayCount = 1;
@@ -401,8 +430,9 @@ export class CitySimulation {
     }
 
     this.rebuildCaches();
-    // Seed initial traffic if map already has connected buildings
+    // Seed initial traffic & Day 1 morning newspaper
     this.seedInitialTraffic(14);
+    this.publishMorningNewspaper(false, false, true);
   }
 
   public exportMapData(name?: string, subtitle?: string): SavedMapData {
@@ -552,6 +582,7 @@ export class CitySimulation {
       residential: 6,
       workplace: 7,
       factory: 7,
+      crops: 7,
       hospital: 8,
       police: 9,
       jail: 9,
@@ -584,7 +615,10 @@ export class CitySimulation {
         for (const p of this.people) {
           if (p.stallId === s.id) {
             p.stallId = undefined;
-            if (!this.assignReturnRoute(p)) p.holdTimer = 0;
+            if (!this.assignReturnRoute(p)) {
+              p.state = 'returning';
+              p.holdTimer = 0;
+            }
           }
         }
       }
@@ -840,23 +874,11 @@ export class CitySimulation {
     return this.getTimePhase() === 'Night' || this.isRainingOrStorming();
   }
 
-  public getRushPeriodLabel(): string {
-    const h = this.minutesOfDay / 60;
-    if (h >= 7.0 && h < 9.5) return 'Morning Rush';
-    if (h >= 14.5 && h < 16.25) return 'School Pickup';
-    if (h >= 16.5 && h < 19.25) return 'Evening Rush';
-    if (h >= 19.5 || h < 5.5) return 'Night Calm';
-    return 'Midday Flow';
-  }
-
   public getDemandMultiplier(): number {
     const h = this.minutesOfDay / 60;
-    if (h >= 7.2 && h < 9.2) return 2.4; // Morning commute surge
-    if (h >= 14.7 && h < 16.0) return 2.0; // School pickup wave
-    if (h >= 16.8 && h < 19.0) return 2.5; // Evening rush hour
-    if (h >= 11.5 && h < 13.8) return 1.3; // Lunchtime errands
-    if (h >= 21.5 || h < 5.5) return 0.35; // Late night sparse traffic
-    return 1.0;
+    if (h >= 21.5 || h < 5.5) return 0.45; // Quiet overnight traffic
+    if (h >= 8.0 && h < 18.0) return 1.15; // Steady daytime activity
+    return 0.85;
   }
 
   public getSignalAspect(tile: MapTile, axis: 'NS' | 'EW'): SignalAspect {
@@ -882,9 +904,27 @@ export class CitySimulation {
     }
   }
 
-  public triggerRushBurst(count = 14) {
-    for (let i = 0; i < count; i++) {
-      this.trySpawnCar();
+  public prepareForPlaySession() {
+    this.dayCount = 1;
+    this.minutesOfDay = 7 * 60 + 5;
+    this.lastMorningPaperDay = 1;
+    this.dailyHighlights = [];
+    this.crashCheckAccumulator = 0;
+    this.newspapers = [];
+    this.unreadNewsCount = 0;
+    this.publishMorningNewspaper(false, false, true);
+  }
+
+  public advanceClockOnly(extraDt: number) {
+    if (!this.isRunning || extraDt <= 0) return;
+    const clamped = Math.min(extraDt, 0.2);
+    this.minutesOfDay += clamped * this.timeScale * 4;
+    if (this.minutesOfDay >= 1440) {
+      this.minutesOfDay -= 1440;
+      this.dayCount += 1;
+      if ((this.dayCount - 1) % 10 === 0) {
+        this.cycleSeason(false);
+      }
     }
   }
 
@@ -894,14 +934,19 @@ export class CitySimulation {
 
     const simDt = dt * this.timeScale;
 
-    // Advance time: 1 game minute = 1 real second at 1x
-    this.minutesOfDay += simDt;
+    // Advance time: 1 real minute = 4 game hours (240 game mins / 60 real sec = 4x)
+    this.minutesOfDay += simDt * 4;
     if (this.minutesOfDay >= 1440) {
       this.minutesOfDay -= 1440;
       this.dayCount += 1;
-      if (this.dayCount % 2 === 1) {
+      if ((this.dayCount - 1) % 10 === 0) {
         this.cycleSeason(false);
       }
+    }
+
+    // Publish 1 morning local newspaper every morning at 06:30 and dispatch delivery
+    if (this.minutesOfDay >= 390 && this.lastMorningPaperDay < this.dayCount) {
+      this.publishMorningNewspaper(playAudio, true);
     }
 
     // Spawn cars according to road capacity, building count & time-of-day rush multiplier
@@ -960,11 +1005,20 @@ export class CitySimulation {
     // Step Fishers, Hobbyists & Small Business Shoppers
     this.updateCitizensAndHobbies(simDt, dt, playAudio);
 
+    // Step Littering, Ocean Trash & Cleanup
+    this.updateTrashAndLittering(simDt, dt, playAudio);
+
+    // Step Morning Newspaper Porch Delivery
+    this.updateNewspaperDelivery(simDt, dt);
+
+    // Step Kayakers, Field Trips & Citizen Self-Building
+    this.updateCommunityActivities(simDt, dt, playAudio);
+
     // Step Pop-up Market Stalls, Illicit Stalls & Beggars
     this.updateMarketStallsAndBeggars(simDt, dt, playAudio);
 
-    // Step Jail Releases
-    this.updateJailAndReleases(simDt);
+    // Step Jail Releases & Prison Escapes
+    this.updateJailAndReleases(simDt, dt, playAudio);
 
     // Step City Hall Chaos Crises (Virus Outbreak, War, Poverty) & Post-Invasion Elections
     this.updateCrises(simDt, dt, playAudio);
@@ -994,6 +1048,16 @@ export class CitySimulation {
     // Step cars physics (including occasional car-vs-pedestrian impacts)
     this.carPedHitCooldown = Math.max(0, this.carPedHitCooldown - dt);
     this.updateCars(simDt, dt, playAudio);
+
+    // Keep particle & popup queues strictly bounded so long 8x sessions stay silky smooth
+    if (this.woodChips.length > 160) this.woodChips.splice(0, this.woodChips.length - 160);
+    if (this.confetti.length > 160) this.confetti.splice(0, this.confetti.length - 160);
+    if (this.smokeParticles.length > 180) this.smokeParticles.splice(0, this.smokeParticles.length - 180);
+    if (this.floatingLabels.length > 40) this.floatingLabels.splice(0, this.floatingLabels.length - 40);
+    if (this.snowballs.length > 30) this.snowballs.splice(0, this.snowballs.length - 30);
+    if (this.gunfireTracers.length > 30) this.gunfireTracers.splice(0, this.gunfireTracers.length - 30);
+    if (this.sleepZzzParticles.length > 30) this.sleepZzzParticles.splice(0, this.sleepZzzParticles.length - 30);
+    if (this.honkRipples.length > 30) this.honkRipples.splice(0, this.honkRipples.length - 30);
   }
 
   private updateDeaths(simDt: number, realDt: number, playAudio: boolean) {
@@ -1039,6 +1103,18 @@ export class CitySimulation {
     };
     this.deathEvents.push(ev);
     this.totalDeaths += 1;
+    if (!this.crises.warActive && Math.random() < 0.28) {
+      const celebrities = [
+        'Legendary Pie Chef Barnaby Crustwell',
+        'Famous Crosswalk Conductor Pip Sterling',
+        'Renowned Honeybee Whisperer Agatha Honeycutt',
+        'Retro Stunt Cyclist Evelina Sparks',
+        'Record-Holding Accordion Virtuoso Maestro Figaro',
+        'Beloved Roller-Skate Postmistress Mabel Swift',
+      ];
+      const celeb = celebrities[Math.floor(Math.random() * celebrities.length)];
+      this.logDailyNews(`TRIBUTE TO A LEGEND: ${celeb} passed away at ${origin.name}—citizens left flowers and cinnamon rolls by the gate.`);
+    }
     if (playAudio) soundEngine.playDeathChime();
   }
 
@@ -1056,25 +1132,24 @@ export class CitySimulation {
     for (const cem of sortedCemeteries) {
       const endRoad = findAdjacentRoadTile(this.tiles, cem.x, cem.y);
       if (!endRoad) continue;
-      const path = findRoadPath(this.tiles, startRoad, endRoad, 1.0);
-      if (!path || path.length < 2) continue;
+      const roadPath = findRoadPath(this.tiles, startRoad, endRoad, 1.0);
+      if (!roadPath || roadPath.length < 2) continue;
 
-      const p0 = path[0];
-      const p1 = path[1];
+      const fullPath: GridPoint[] = [{ x: origin.x, y: origin.y }, ...roadPath];
+      const p0 = fullPath[0];
+      const p1 = fullPath[1];
       const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
-      const rightX = -Math.sin(angle) * LANE_OFFSET;
-      const rightY = Math.cos(angle) * LANE_OFFSET;
 
       const hearse: Car = {
         id: `car_${this.carIdCounter++}`,
         type: 'hearse',
         color: '#0F172A',
-        wx: (p0.x + 0.5) * TILE_SIZE + rightX,
-        wy: (p0.y + 0.5) * TILE_SIZE + rightY,
+        wx: (p0.x + 0.5) * TILE_SIZE,
+        wy: (p0.y + 0.5) * TILE_SIZE,
         angle,
         speed: 28,
         maxSpeed: 54,
-        path,
+        path: fullPath,
         pathIndex: 1,
         originBuildingId: origin.id,
         destBuildingId: cem.id,
@@ -1207,25 +1282,25 @@ export class CitySimulation {
 
     if (!bestStation || !bestPath) return false;
 
-    const p0 = bestPath[0];
-    const p1 = bestPath[1];
+    const fullPath: GridPoint[] = [{ x: bestStation.x, y: bestStation.y }, ...bestPath];
+    const p0 = fullPath[0];
+    const p1 = fullPath[1];
     const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
-    const rightX = -Math.sin(angle) * LANE_OFFSET;
-    const rightY = Math.cos(angle) * LANE_OFFSET;
 
     const cruiser: Car = {
       id: `car_${this.carIdCounter++}`,
       type: 'police',
       color: '#1E293B',
-      wx: (p0.x + 0.5) * TILE_SIZE + rightX,
-      wy: (p0.y + 0.5) * TILE_SIZE + rightY,
+      wx: (p0.x + 0.5) * TILE_SIZE,
+      wy: (p0.y + 0.5) * TILE_SIZE,
       angle,
-      speed: 45,
-      maxSpeed: 94,
-      path: bestPath,
+      speed: 48,
+      maxSpeed: 98,
+      path: fullPath,
       pathIndex: 1,
       originBuildingId: bestStation.id,
       destBuildingId: incident.buildingId,
+      returnStationId: bestStation.id,
       originCategory: 'police',
       destCategory: 'residential',
       waitSeconds: 0,
@@ -1257,7 +1332,8 @@ export class CitySimulation {
     const homes = byCat('residential');
     const schools = byCat('school');
     const hospitals = byCat('hospital');
-    const offices = [...byCat('workplace'), ...byCat('factory'), ...byCat('city_hall')];
+    const crops = byCat('crops');
+    const offices = [...byCat('workplace'), ...byCat('factory'), ...byCat('city_hall'), ...crops];
     const visitSpots = [...byCat('visit_spot'), ...byCat('commercial')];
     const parks = byCat('park');
 
@@ -1275,51 +1351,56 @@ export class CitySimulation {
       destPool = connectedEvents;
     }
 
-    // Occasional ambulance dispatch from/to hospital
-    if (hospitals.length > 0 && r < 0.08) {
+    // Ambulances occasionally originate from a Hospital station (and drive back to hospital)
+    if (hospitals.length > 0 && r < 0.05) {
       vehicleType = 'ambulance';
-      if (Math.random() < 0.5) {
-        originPool = hospitals;
-        destPool = homes.length ? homes : connected;
-      } else {
-        originPool = homes.length ? homes : connected;
-        destPool = hospitals;
-      }
-    } else if (h >= 6.8 && h < 9.5) {
-      // Morning rush: Homes -> Schools & Job Opportunities (Offices/Factories)
+      originPool = hospitals;
+      destPool = homes.length ? homes : connected;
+    } else if (crops.length > 0 && visitSpots.length > 0 && r >= 0.05 && r < 0.12) {
+      vehicleType = 'van';
+      originPool = crops;
+      destPool = visitSpots;
+    } else if (h >= 7.75 && h < 10.0) {
+      // Morning commute: Homes -> Schools (8am bell), Offices & Shops
       originPool = homes.length ? homes : connected;
-      if (schools.length && r < 0.36) {
+      if (schools.length && r < 0.32) {
         destPool = schools;
-        if (Math.random() < 0.35) vehicleType = 'bus';
-      } else if (offices.length && r < 0.8) {
+        if (Math.random() < 0.45) vehicleType = 'bus';
+      } else if (offices.length && r < 0.72) {
         destPool = offices;
       } else if (visitSpots.length) {
         destPool = visitSpots;
-        if (Math.random() < 0.22) vehicleType = 'van';
+        if (Math.random() < 0.2) vehicleType = 'van';
       }
-    } else if (h >= 14.5 && h < 16.3) {
-      // School pickup & afternoon library/shop visits
-      if (schools.length && homes.length && r < 0.5) {
+    } else if (h >= 10.0 && h < 16.0) {
+      // School hours (8am-4pm) & daytime errands / deliveries / parks
+      const daytimeSpots = [...visitSpots, ...parks, ...offices];
+      if (schools.length && homes.length && h >= 15.25 && r < 0.3) {
+        // Pre-4pm school dismissal pickups
         originPool = schools;
         destPool = homes;
-        if (Math.random() < 0.4) vehicleType = 'bus';
-      } else if (visitSpots.length) {
-        destPool = visitSpots;
-      }
-    } else if (h >= 16.5 && h < 19.5) {
-      // Evening rush: Workplaces & Visit Spots -> Homes
-      const workPool = [...offices, ...visitSpots];
-      originPool = workPool.length ? workPool : connected;
-      destPool = homes.length ? homes : connected;
-      if (Math.random() < 0.14) vehicleType = 'van';
-    } else {
-      // Midday / Night: errands, libraries, cafes & parks
-      const errands = [...visitSpots, ...parks, ...hospitals, ...offices];
-      if (r < 0.55 && homes.length && errands.length) {
+        if (Math.random() < 0.5) vehicleType = 'bus';
+      } else if (homes.length && daytimeSpots.length && r < 0.65) {
         originPool = homes;
-        destPool = errands;
-      } else if (visitSpots.length) {
-        if (Math.random() < 0.22) vehicleType = 'van';
+        destPool = daytimeSpots;
+      } else if (daytimeSpots.length && homes.length) {
+        originPool = daytimeSpots;
+        destPool = homes;
+      }
+    } else if (h >= 16.0 && h < 17.0 && schools.length && homes.length && r < 0.3) {
+      // 4:00 PM final school dismissal heading straight home
+      originPool = schools;
+      destPool = homes;
+      vehicleType = 'bus';
+    } else {
+      // After 4pm & evening return trips home (no extra school runs)
+      const outSpots = [...offices, ...visitSpots, ...parks];
+      if (outSpots.length && homes.length && r < 0.76) {
+        originPool = outSpots;
+        destPool = homes;
+      } else if (homes.length && visitSpots.length) {
+        originPool = homes;
+        destPool = visitSpots;
       }
     }
 
@@ -1331,7 +1412,11 @@ export class CitySimulation {
       dest = others[Math.floor(Math.random() * others.length)];
     }
 
-    if ((origin.category === 'factory' || dest.category === 'factory') && vehicleType !== 'ambulance' && Math.random() < 0.38) {
+    if (
+      (origin.category === 'factory' || dest.category === 'factory' || origin.category === 'crops' || dest.category === 'crops') &&
+      vehicleType !== 'ambulance' &&
+      Math.random() < 0.42
+    ) {
       vehicleType = 'van';
     }
 
@@ -1348,17 +1433,20 @@ export class CitySimulation {
     const endRoad = findAdjacentRoadTile(this.tiles, dest.x, dest.y);
     if (!startRoad || !endRoad) return false;
 
-    const path = findRoadPath(this.tiles, startRoad, endRoad);
-    if (!path || path.length < 2) return false;
+    const roadPath = findRoadPath(this.tiles, startRoad, endRoad);
+    if (!roadPath || roadPath.length < 2) return false;
 
-    // Compute initial heading & lane-offset position
+    const isEmergency = vehicleType === 'ambulance' || vehicleType === 'police' || vehicleType === 'firetruck';
+    const path = isEmergency ? [{ x: origin.x, y: origin.y }, ...roadPath] : roadPath;
+
+    // Compute initial heading & position (ambulances depart visibly from their hospital lot)
     const p0 = path[0];
     const p1 = path[1];
     const dx = p1.x - p0.x;
     const dy = p1.y - p0.y;
     const angle = Math.atan2(dy, dx);
-    const rightX = -Math.sin(angle) * LANE_OFFSET;
-    const rightY = Math.cos(angle) * LANE_OFFSET;
+    const rightX = isEmergency ? 0 : -Math.sin(angle) * LANE_OFFSET;
+    const rightY = isEmergency ? 0 : Math.cos(angle) * LANE_OFFSET;
 
     const spawnWx = (p0.x + 0.5) * TILE_SIZE + rightX;
     const spawnWy = (p0.y + 0.5) * TILE_SIZE + rightY;
@@ -1379,7 +1467,7 @@ export class CitySimulation {
       maxSpeed = 60;
     } else if (vehicleType === 'ambulance') {
       color = '#FFFFFF';
-      maxSpeed = 88;
+      maxSpeed = 92;
     }
 
     const car: Car = {
@@ -1395,6 +1483,7 @@ export class CitySimulation {
       pathIndex: 1,
       originBuildingId: origin.id,
       destBuildingId: dest.id,
+      returnStationId: isEmergency ? origin.id : undefined,
       originCategory: origin.category,
       destCategory: dest.category,
       waitSeconds: 0,
@@ -1451,12 +1540,7 @@ export class CitySimulation {
       }
 
       if (car.pathIndex >= car.path.length) {
-        if (
-          this.handleProtestCarArrival(car) ||
-          this.handleFireCarArrival(car) ||
-          this.handleCrashCarArrival(car) ||
-          this.handleRaidCarArrival(car)
-        ) {
+        if (this.handleEmergencyArrival(car)) {
           continue;
         }
         this.finishTrip(car);
@@ -1474,12 +1558,7 @@ export class CitySimulation {
       if (distToTarget < 11 || passedWaypoint) {
         car.pathIndex += 1;
         if (car.pathIndex >= car.path.length) {
-          if (
-            this.handleProtestCarArrival(car) ||
-            this.handleFireCarArrival(car) ||
-            this.handleCrashCarArrival(car) ||
-            this.handleRaidCarArrival(car)
-          ) {
+          if (this.handleEmergencyArrival(car)) {
             continue;
           }
           this.finishTrip(car);
@@ -1488,11 +1567,13 @@ export class CitySimulation {
         }
       }
 
-      // Smoothly steer toward target point
+      // Smoothly steer toward target point (O(1) NaN-safe angle wrap)
       const desiredAngle = distToTarget > 1 ? Math.atan2(toY, toX) : segmentAngle;
-      let angleDiff = desiredAngle - car.angle;
-      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+      if (!Number.isFinite(car.angle)) car.angle = desiredAngle;
+      const rawDiff = desiredAngle - car.angle;
+      const angleDiff = Number.isFinite(rawDiff)
+        ? Math.atan2(Math.sin(rawDiff), Math.cos(rawDiff))
+        : 0;
       car.angle += angleDiff * Math.min(1, dt * 11);
 
       const fwdX = Math.cos(car.angle);
@@ -1540,6 +1621,12 @@ export class CitySimulation {
             if (cap < 18) blockedByVehicle = true;
           }
         }
+      }
+
+      // Emergency responders stuck behind slower civilian traffic gently pull around instead of sitting deadlocked
+      if (isEmergency && blockedByVehicle && car.waitSeconds > 1.7) {
+        desiredMaxSpeed = Math.max(desiredMaxSpeed, 32);
+        blockedByVehicle = false;
       }
 
       // 1.5 Check active Car Crash obstruction ahead on the road
@@ -1759,17 +1846,17 @@ export class CitySimulation {
       car.wx += Math.cos(car.angle) * car.speed * dt;
       car.wy += Math.sin(car.angle) * car.speed * dt;
 
-      // Occasional car-vs-pedestrian collision when a fast car fails to stop in time on road/crossing
+      // Occasional car-vs-pedestrian collision when a fast car fails to stop on a non-crossing road
       if (
         !isEmergency &&
         car.type !== 'hearse' &&
-        car.speed > 26 &&
+        car.speed > 38 &&
         this.carPedHitCooldown <= 0
       ) {
         const cTileX = Math.floor(car.wx / TILE_SIZE);
         const cTileY = Math.floor(car.wy / TILE_SIZE);
         const cTile = this.getTile(cTileX, cTileY);
-        if (cTile && cTile.hasRoad) {
+        if (cTile && cTile.hasRoad && !cTile.hasZebraCrossing) {
           for (let pIdx = this.people.length - 1; pIdx >= 0; pIdx--) {
             const ped = this.people[pIdx];
             if (
@@ -1784,14 +1871,14 @@ export class CitySimulation {
             const pry = ped.wy - car.wy;
             const pfwd = prx * fwdX + pry * fwdY;
             const pside = Math.abs(-prx * fwdY + pry * fwdX);
-            if (pfwd > 2 && pfwd < 12 && pside < 7.5) {
+            if (pfwd > 2 && pfwd < 10 && pside < 6.5) {
               const pedTile = this.getTile(
                 Math.floor(ped.wx / TILE_SIZE),
                 Math.floor(ped.wy / TILE_SIZE)
               );
-              if (pedTile && pedTile.hasRoad) {
-                this.carPedHitCooldown = 26;
-                if (Math.random() < 0.24) {
+              if (pedTile && pedTile.hasRoad && !pedTile.hasZebraCrossing) {
+                this.carPedHitCooldown = 90;
+                if (Math.random() < 0.08) {
                   car.speed = 0;
                   car.isBraking = true;
                   car.waitSeconds = 3.2;
@@ -1829,7 +1916,7 @@ export class CitySimulation {
                       y: cTileY,
                       wx: ped.wx,
                       wy: ped.wy,
-                      buildingName: `Crossing (${cTileX}, ${cTileY})`,
+                      buildingName: this.describeArea(cTileX, cTileY),
                       age: 0,
                       maxAge: 8.5,
                       hearseDispatched,
@@ -1859,6 +1946,144 @@ export class CitySimulation {
       }
       void realDt;
     }
+  }
+
+  private handleEmergencyArrival(car: Car): boolean {
+    if (car.isReturningToStation) {
+      // If police just dropped prisoners at Jail and still need to drive back to Police Station, route leg 2!
+      if (
+        car.returnJailId &&
+        car.destBuildingId === car.returnJailId &&
+        car.returnStationId &&
+        car.returnStationId !== car.returnJailId
+      ) {
+        const station = this.buildingsList.find((b) => b.id === car.returnStationId);
+        if (station) {
+          const currTileX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(car.wx / TILE_SIZE)));
+          const currTileY = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(car.wy / TILE_SIZE)));
+          const startRoad =
+            findAdjacentRoadTile(this.tiles, currTileX, currTileY) ||
+            (this.getTile(currTileX, currTileY)?.hasRoad ? { x: currTileX, y: currTileY } : null);
+          const stationRoad = findAdjacentRoadTile(this.tiles, station.x, station.y);
+          if (startRoad && stationRoad) {
+            const roadPath = findRoadPath(this.tiles, startRoad, stationRoad, 0.8);
+            if (roadPath && roadPath.length >= 1) {
+              car.path = [...roadPath, { x: station.x, y: station.y }];
+              car.pathIndex = 0;
+              car.destBuildingId = station.id;
+              car.destCategory = station.category;
+              car.returnJailId = undefined;
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    }
+
+    if (
+      this.handleProtestCarArrival(car) ||
+      this.handleFireCarArrival(car) ||
+      this.handleCrashCarArrival(car) ||
+      this.handleRaidCarArrival(car)
+    ) {
+      return true;
+    }
+
+    // Police finishing robbery or escapee capture -> drive to Jail / Police Station instead of vanishing
+    if (
+      car.type === 'police' &&
+      (car.targetRobberyId || car.targetEscapeeId)
+    ) {
+      if (car.targetRobberyId) {
+        const rob = this.robberies.find((r) => r.id === car.targetRobberyId);
+        if (rob && rob.status === 'active') {
+          rob.status = 'caught';
+          rob.statusTimer = 4.0;
+          this.stoppedRobberies += 1;
+          this.sendToJail(1);
+          this.logDailyNews(`HOT TAKE: That burglar in ${rob.neighbourhoodName} really thought nobody would spot a bright getaway sprint—Police bagged 'em in seconds!`);
+          soundEngine.playPoliceResolved();
+        }
+      }
+      if (car.targetEscapeeId) {
+        const escIdx = this.people.findIndex((p) => p.id === car.targetEscapeeId);
+        if (escIdx !== -1) {
+          const esc = this.people[escIdx];
+          this.people.splice(escIdx, 1);
+          this.sendToJail(1);
+          this.floatingLabels.push({
+            wx: esc.wx,
+            wy: esc.wy - 10,
+            text: 'Recaptured!',
+            color: '#F8FAFC',
+            bgColor: '#1D4ED8',
+            age: 0,
+            maxAge: 1.5,
+          });
+          soundEngine.playPoliceCapture();
+        }
+      }
+      return this.sendVehicleBackToStation(car, undefined, true);
+    }
+
+    // Ambulances on patient pickup -> drive back to hospital instead of disappearing at house!
+    if (car.type === 'ambulance' && car.returnStationId) {
+      return this.sendVehicleBackToStation(car, car.returnStationId, false);
+    }
+
+    return false;
+  }
+
+  private sendVehicleBackToStation(
+    car: Car,
+    overrideStationId?: string,
+    stopAtJailFirst = false
+  ): boolean {
+    car.parkedAtProtest = false;
+    car.parkedAtFire = false;
+    car.parkedAtCrash = false;
+    car.parkedAtRaid = false;
+    car.targetProtestId = undefined;
+    car.targetFireId = undefined;
+    car.targetCrashId = undefined;
+    car.targetRaidStallId = undefined;
+    car.targetRobberyId = undefined;
+    car.targetEscapeeId = undefined;
+    car.waitSeconds = 0;
+    car.isJammed = false;
+
+    const homeStationId = overrideStationId || car.returnStationId || car.originBuildingId;
+    const station = this.buildingsList.find((b) => b.id === homeStationId);
+    const jail = stopAtJailFirst
+      ? this.buildingsList.find((b) => b.category === 'jail')
+      : undefined;
+
+    const firstTarget = jail || station;
+    if (!firstTarget) return false;
+
+    const currTileX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(car.wx / TILE_SIZE)));
+    const currTileY = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(car.wy / TILE_SIZE)));
+    const currTile = this.getTile(currTileX, currTileY);
+    const startRoad =
+      currTile && currTile.hasRoad
+        ? { x: currTileX, y: currTileY }
+        : findAdjacentRoadTile(this.tiles, currTileX, currTileY);
+    const destRoad = findAdjacentRoadTile(this.tiles, firstTarget.x, firstTarget.y);
+    if (!startRoad || !destRoad) return false;
+
+    const roadPath = findRoadPath(this.tiles, startRoad, destRoad, 0.9);
+    if (!roadPath || roadPath.length === 0) return false;
+
+    car.isReturningToStation = true;
+    car.returnStationId = station?.id || homeStationId;
+    car.returnJailId = jail?.id;
+    car.destBuildingId = firstTarget.id;
+    car.destCategory = firstTarget.category;
+    car.path = [...roadPath, { x: firstTarget.x, y: firstTarget.y }];
+    car.pathIndex = 0;
+    car.speed = Math.max(24, car.speed);
+    return true;
   }
 
   private updatePeopleAndChop(simDt: number, realDt: number, playAudio: boolean) {
@@ -2009,12 +2234,14 @@ export class CitySimulation {
     }
 
     const curfew = this.isOutdoorCurfew();
+    const isWarPanic =
+      this.crises.warActive || this.people.some((p) => p.role === 'invader');
 
-    // 2. Spawn woodcutters if forest tiles & connected buildings exist (never spawn in middle of nowhere or during curfew)
+    // 2. Spawn woodcutters if forest tiles & connected buildings exist (never spawn in middle of nowhere or during curfew/war)
     const forestTiles = this.tiles.filter((t) => t.terrain === 'forest');
     const activeWoodcutters = this.people.filter((p) => p.role === 'woodcutter');
     const desiredWoodcutters =
-      !curfew && forestTiles.length > 0 && this.buildingsList.length > 0
+      !curfew && !isWarPanic && forestTiles.length > 0 && this.buildingsList.length > 0
         ? Math.min(3, Math.max(1, Math.ceil(forestTiles.length / 7)))
         : 0;
 
@@ -2030,7 +2257,7 @@ export class CitySimulation {
     const activePeds = this.people.filter((p) => p.role === 'pedestrian');
     const walkerOrigins = this.buildingsList.filter((b) => b.category !== 'road_path');
     const desiredPeds =
-      !curfew && walkerOrigins.length >= 2
+      !curfew && !isWarPanic && walkerOrigins.length >= 2
         ? Math.min(6, Math.max(2, Math.floor(walkerOrigins.length / 4)))
         : 0;
     if (activePeds.length < desiredPeds) {
@@ -2046,8 +2273,9 @@ export class CitySimulation {
       const p = this.people[i];
 
       if (p.role === 'pedestrian') {
-        if (curfew && p.state !== 'returning') {
-          p.speed = Math.max(p.speed, 38);
+        if ((curfew || isWarPanic) && p.state !== 'returning') {
+          p.isPanicking = isWarPanic;
+          p.speed = isWarPanic ? 48 : Math.max(p.speed, 38);
           if (!this.assignReturnRoute(p)) {
             this.people.splice(i, 1);
           }
@@ -2273,8 +2501,9 @@ export class CitySimulation {
       }
 
       if (p.role === 'woodcutter') {
-        if (curfew && p.state !== 'returning') {
-          p.speed = Math.max(p.speed, 38);
+        if ((curfew || isWarPanic) && p.state !== 'returning') {
+          p.isPanicking = isWarPanic;
+          p.speed = isWarPanic ? 48 : Math.max(p.speed, 38);
           if (!this.assignReturnRoute(p)) {
             this.people.splice(i, 1);
           }
@@ -2377,11 +2606,17 @@ export class CitySimulation {
     );
   }
 
-  private getCurrentWalkableStart(wx: number, wy: number, allowFrozenWater = false): GridPoint | null {
+  private getCurrentWalkableStart(
+    wx: number,
+    wy: number,
+    allowFrozenWater = false,
+    allowAllTerrain = false
+  ): GridPoint | null {
     const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(wx / TILE_SIZE)));
     const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(wy / TILE_SIZE)));
+    if (allowAllTerrain) return { x: tx, y: ty };
     const tile = this.getTile(tx, ty);
-    if (tile && isPedestrianTileWalkable(tile, allowFrozenWater)) {
+    if (tile && isPedestrianTileWalkable(tile, allowFrozenWater, allowAllTerrain)) {
       return { x: tx, y: ty };
     }
     return findNearestWalkableTile(this.tiles, tx, ty, 3, allowFrozenWater);
@@ -2395,9 +2630,16 @@ export class CitySimulation {
     finalWy?: number
   ): boolean {
     const allowFrozen = this.canPersonSkateOnFrozenWater(p);
-    const startPt = this.getCurrentWalkableStart(p.wx, p.wy, allowFrozen);
+    const allowAll = p.role === 'invader' || (p.role === 'soldier' && this.crises.warActive);
+    const startPt = this.getCurrentWalkableStart(p.wx, p.wy, allowFrozen, allowAll);
     if (!startPt) return false;
-    const path = findPedestrianPath(this.tiles, startPt, { x: destTileX, y: destTileY }, allowFrozen);
+    const path = findPedestrianPath(
+      this.tiles,
+      startPt,
+      { x: destTileX, y: destTileY },
+      allowFrozen,
+      allowAll
+    );
     if (!path || path.length === 0) return false;
 
     p.targetTileX = destTileX;
@@ -2413,9 +2655,11 @@ export class CitySimulation {
     tile: MapTile | null,
     targetTileX?: number,
     targetTileY?: number,
-    allowFrozenWater = false
+    allowFrozenWater = false,
+    allowAllTerrain = false
   ): boolean {
-    if (!tile || !isPedestrianTileWalkable(tile, allowFrozenWater)) return false;
+    if (!tile || !isPedestrianTileWalkable(tile, allowFrozenWater, allowAllTerrain)) return false;
+    if (allowAllTerrain) return true;
     if (
       tile.building &&
       tile.building.category !== 'park' &&
@@ -2432,12 +2676,16 @@ export class CitySimulation {
     realDt: number,
     animRate = 8
   ): 'moving' | 'arrived' | 'blocked' {
+    if (p.rerouteCooldown && p.rerouteCooldown > 0) {
+      p.rerouteCooldown = Math.max(0, p.rerouteCooldown - realDt);
+    }
     const allowFrozen = this.canPersonSkateOnFrozenWater(p);
-    // If person is stranded on a newly paved unmarked road or water tile, step back to adjacent walkable tile (never leap across a river)
+    const allowAll = p.role === 'invader' || (p.role === 'soldier' && this.crises.warActive);
+    // If person is stranded on a newly paved unmarked road or water tile, step back to adjacent walkable tile
     const curTx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(p.wx / TILE_SIZE)));
     const curTy = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(p.wy / TILE_SIZE)));
     const curTile = this.getTile(curTx, curTy);
-    if (curTile && !isPedestrianTileWalkable(curTile, allowFrozen)) {
+    if (!allowAll && curTile && !isPedestrianTileWalkable(curTile, allowFrozen)) {
       const prevIdx = Math.max(0, (p.pedestrianPathIndex ?? 1) - 1);
       const prevWp = p.pedestrianPath?.[prevIdx];
       const prevTile = prevWp ? this.getTile(prevWp.x, prevWp.y) : null;
@@ -2453,6 +2701,8 @@ export class CitySimulation {
 
     if (!p.pedestrianPath || p.pedestrianPath.length === 0) {
       if (p.targetTileX === undefined || p.targetTileY === undefined) return 'blocked';
+      if ((p.rerouteCooldown || 0) > 0) return 'moving';
+      p.rerouteCooldown = 0.65;
       if (!this.assignPedestrianRoute(p, p.targetTileX, p.targetTileY, p.targetWx, p.targetWy)) {
         return 'blocked';
       }
@@ -2464,9 +2714,11 @@ export class CitySimulation {
     if (idx < path.length) {
       const wp = path[idx];
       const wpTile = this.getTile(wp.x, wp.y);
-      if (!this.canPersonStepOntoTile(wpTile, p.targetTileX, p.targetTileY, allowFrozen)) {
+      if (!this.canPersonStepOntoTile(wpTile, p.targetTileX, p.targetTileY, allowFrozen, allowAll)) {
         // Road, water, broken bridge, or building was placed ahead! Re-route around it via gaps/crossings/footbridges
         if (p.targetTileX === undefined || p.targetTileY === undefined) return 'blocked';
+        if ((p.rerouteCooldown || 0) > 0) return 'blocked';
+        p.rerouteCooldown = 0.65;
         if (!this.assignPedestrianRoute(p, p.targetTileX, p.targetTileY, p.targetWx, p.targetWy)) {
           return 'blocked';
         }
@@ -2493,15 +2745,36 @@ export class CitySimulation {
         const nextWy = p.wy + (dy / dist) * step;
         const nextTx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(nextWx / TILE_SIZE)));
         const nextTy = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(nextWy / TILE_SIZE)));
-        if (nextTx !== curTx || nextTy !== curTy) {
+        if (!allowAll && (nextTx !== curTx || nextTy !== curTy)) {
           const nextTile = this.getTile(nextTx, nextTy);
           if (!this.canPersonStepOntoTile(nextTile, p.targetTileX, p.targetTileY, allowFrozen)) {
-            if (
-              p.targetTileX === undefined ||
-              p.targetTileY === undefined ||
-              !this.assignPedestrianRoute(p, p.targetTileX, p.targetTileY, p.targetWx, p.targetWy)
-            ) {
-              return 'blocked';
+            // Try sliding cleanly along X or Y inside walkable tiles before paying for an A* reroute
+            const slideXTile = this.getTile(nextTx, curTy);
+            const slideYTile = this.getTile(curTx, nextTy);
+            if (nextTx !== curTx && this.canPersonStepOntoTile(slideXTile, p.targetTileX, p.targetTileY, allowFrozen)) {
+              p.wx = nextWx;
+              p.animPhase += realDt * animRate;
+              return 'moving';
+            }
+            if (nextTy !== curTy && this.canPersonStepOntoTile(slideYTile, p.targetTileX, p.targetTileY, allowFrozen)) {
+              p.wy = nextWy;
+              p.animPhase += realDt * animRate;
+              return 'moving';
+            }
+            // Pull gently toward current tile center so next frame never loops on diagonal corner clipping
+            const centerX = (curTx + 0.5) * TILE_SIZE;
+            const centerY = (curTy + 0.5) * TILE_SIZE;
+            p.wx += (centerX - p.wx) * 0.45;
+            p.wy += (centerY - p.wy) * 0.45;
+            if ((p.rerouteCooldown || 0) <= 0) {
+              p.rerouteCooldown = 0.75;
+              if (
+                p.targetTileX === undefined ||
+                p.targetTileY === undefined ||
+                !this.assignPedestrianRoute(p, p.targetTileX, p.targetTileY, p.targetWx, p.targetWy)
+              ) {
+                return 'blocked';
+              }
             }
             return 'moving';
           }
@@ -2518,13 +2791,14 @@ export class CitySimulation {
 
   private assignReturnRoute(p: Person): boolean {
     const allowFrozen = this.canPersonSkateOnFrozenWater(p);
-    const startPt = this.getCurrentWalkableStart(p.wx, p.wy, allowFrozen);
+    const allowAll = p.role === 'invader' || (p.role === 'soldier' && this.crises.warActive);
+    const startPt = this.getCurrentWalkableStart(p.wx, p.wy, allowFrozen, allowAll);
     if (!startPt) return false;
 
     if (p.homeBuildingId) {
       const home = this.buildingsList.find((b) => b.id === p.homeBuildingId);
       if (home) {
-        const path = findPedestrianPath(this.tiles, startPt, { x: home.x, y: home.y }, allowFrozen);
+        const path = findPedestrianPath(this.tiles, startPt, { x: home.x, y: home.y }, allowFrozen, allowAll);
         if (path) {
           p.state = 'returning';
           p.holdTimer = 18;
@@ -2656,36 +2930,41 @@ export class CitySimulation {
 
   private updateCitizensAndHobbies(simDt: number, realDt: number, playAudio: boolean) {
     const curfew = this.isOutdoorCurfew();
+    const isWarPanic =
+      this.crises.warActive || this.people.some((p) => p.role === 'invader');
 
-    // 1. Spawn Fishers along reachable riverbanks / water shorelines (disabled during Night/Rain curfew)
-    const shoreSpots = this.getWalkableShoreTiles();
-    const activeFishers = this.people.filter((p) => p.role === 'fisher');
-    const tackleShops = this.buildingsList.filter((b) => b.blueprintId === 'tackle_shop');
-    const maxFishers =
-      !curfew && shoreSpots.length > 0 && this.buildingsList.length > 0
-        ? Math.min(5, Math.max(1, 2 + Math.min(2, tackleShops.length)))
-        : 0;
-
-    if (activeFishers.length < maxFishers) {
-      this.fisherSpawnAccumulator += simDt;
-      if (this.fisherSpawnAccumulator >= 5.5) {
-        this.fisherSpawnAccumulator = 0;
-        this.spawnFisher(shoreSpots, tackleShops);
+    // 1. Spawn Fishers along reachable riverbanks / water shorelines (only compute shore scan on timer tick!)
+    if (!curfew && !isWarPanic && this.buildingsList.length > 0) {
+      const activeFishersCount = this.people.filter((p) => p.role === 'fisher').length;
+      const tackleShops = this.buildingsList.filter((b) => b.blueprintId === 'tackle_shop');
+      const maxFishers = Math.min(5, Math.max(1, 2 + Math.min(2, tackleShops.length)));
+      if (activeFishersCount < maxFishers) {
+        this.fisherSpawnAccumulator += simDt;
+        if (this.fisherSpawnAccumulator >= 5.5) {
+          this.fisherSpawnAccumulator = 0;
+          const shoreSpots = this.getWalkableShoreTiles();
+          if (shoreSpots.length > 0) {
+            this.spawnFisher(shoreSpots, tackleShops);
+          }
+        }
       }
     }
 
-    // 2. Spawn Seasonal Hobbyists from real buildings (disabled during Night/Rain curfew)
+    // 2. Spawn Seasonal Hobbyists from real buildings (calmer outside school hours after 4pm; disabled at Night/Rain or War)
     const activeHobbyists = this.people.filter((p) => p.role === 'hobbyist');
-    const maxHobbyists = curfew ? 0 : 6;
+    const currentHour = this.minutesOfDay / 60;
+    const isAfterSchoolHours = currentHour >= 16 || currentHour < 8;
+    const maxHobbyists = curfew || isWarPanic ? 0 : isAfterSchoolHours ? 4 : 6;
     if (activeHobbyists.length < maxHobbyists && this.buildingsList.length > 0) {
       this.hobbyistSpawnAccumulator += simDt;
-      if (this.hobbyistSpawnAccumulator >= 5.2) {
+      const hobbyInterval = isAfterSchoolHours ? 7.5 : 5.2;
+      if (this.hobbyistSpawnAccumulator >= hobbyInterval) {
         this.hobbyistSpawnAccumulator = 0;
         this.spawnHobbyist();
       }
     }
 
-    // 3. Spawn Small Business & Market Stall Shoppers walking from homes (disabled during curfew)
+    // 3. Spawn Small Business & Market Stall Shoppers walking from homes (disabled during curfew or War)
     const houses = this.buildingsList.filter((b) => b.category === 'residential');
     const shops = this.buildingsList.filter(
       (b) => b.category === 'commercial' || b.category === 'visit_spot'
@@ -2693,7 +2972,7 @@ export class CitySimulation {
     const activeShoppers = this.people.filter((p) => p.role === 'shopper');
     const povertyFactor = this.crises.povertyActive ? 0.55 : 1.0;
     const maxShoppers =
-      !curfew && houses.length > 0 && (shops.length > 0 || this.marketStalls.length > 0)
+      !curfew && !isWarPanic && houses.length > 0 && (shops.length > 0 || this.marketStalls.length > 0)
         ? Math.max(
             1,
             Math.round(
@@ -2716,8 +2995,9 @@ export class CitySimulation {
       const p = this.people[i];
 
       if (p.role === 'fisher') {
-        if (curfew && p.state !== 'returning') {
-          p.speed = Math.max(p.speed, 38);
+        if ((curfew || isWarPanic) && p.state !== 'returning') {
+          p.isPanicking = isWarPanic;
+          p.speed = isWarPanic ? 48 : Math.max(p.speed, 38);
           if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
           continue;
         }
@@ -2846,8 +3126,9 @@ export class CitySimulation {
 
       if (p.role === 'hobbyist') {
         const wrongIceSeason = p.hobbyKind === 'ice_skating' && this.season !== 'Winter';
-        if ((curfew || wrongIceSeason) && p.state !== 'returning') {
-          p.speed = Math.max(p.speed, 38);
+        if ((curfew || wrongIceSeason || isWarPanic) && p.state !== 'returning') {
+          p.isPanicking = isWarPanic;
+          p.speed = isWarPanic ? 48 : Math.max(p.speed, 38);
           if (!this.assignReturnRoute(p)) {
             this.people.splice(i, 1);
           }
@@ -2862,7 +3143,7 @@ export class CitySimulation {
             this.people.splice(i, 1);
           }
         } else if (p.state === 'doing_hobby') {
-          p.animPhase += realDt * (p.hobbyKind === 'music' ? 7 : p.hobbyKind === 'ice_skating' ? 5.2 : 4.2);
+          p.animPhase += realDt * (p.hobbyKind === 'music' ? 7 : p.hobbyKind === 'ice_skating' || p.hobbyKind === 'skateboarding' ? 5.6 : 4.2);
           p.holdTimer -= realDt;
 
           if (p.hobbyKind === 'music' && Math.random() < realDt * 0.45) {
@@ -2881,6 +3162,21 @@ export class CitySimulation {
             const cy = (p.targetTileY + 0.5) * TILE_SIZE;
             p.wx = cx + Math.sin(p.animPhase * 0.5) * 11;
             p.wy = cy + Math.sin(p.animPhase) * 6.5;
+          } else if (p.hobbyKind === 'skateboarding' && p.targetTileX !== undefined && p.targetTileY !== undefined) {
+            const cx = (p.targetTileX + 0.5) * TILE_SIZE;
+            const cy = (p.targetTileY + 0.52) * TILE_SIZE;
+            p.wx = cx + Math.cos(p.animPhase * 0.6) * 12;
+            p.wy = cy + Math.sin(p.animPhase * 1.2) * 5;
+          } else if (p.hobbyKind === 'bird_feeding' && Math.random() < realDt * 1.1) {
+            this.woodChips.push({
+              wx: p.wx + 7 + (Math.random() - 0.5) * 8,
+              wy: p.wy + 3,
+              vx: (Math.random() - 0.3) * 14,
+              vy: -9 - Math.random() * 8,
+              age: 0,
+              maxAge: 0.4,
+              color: '#FDE68A',
+            });
           } else if (p.hobbyKind === 'snowball_fight' && Math.random() < realDt * 0.65) {
             const partner = p.targetPersonId
               ? this.people.find((o) => o.id === p.targetPersonId)
@@ -2961,8 +3257,9 @@ export class CitySimulation {
       }
 
       if (p.role === 'shopper') {
-        if (curfew && !p.isShadyBuyer && p.state !== 'returning') {
-          p.speed = Math.max(p.speed, 38);
+        if ((curfew || isWarPanic) && !p.isShadyBuyer && p.state !== 'returning') {
+          p.isPanicking = isWarPanic;
+          p.speed = isWarPanic ? 48 : Math.max(p.speed, 38);
           if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
           continue;
         }
@@ -3054,6 +3351,12 @@ export class CitySimulation {
                     ? 'Bought Clothes!'
                     : stall.goods === 'produce'
                     ? 'Bought Produce!'
+                    : stall.goods === 'kayak'
+                    ? 'Kayak Pass!'
+                    : stall.goods === 'rowboat'
+                    ? 'Rowboat Pass!'
+                    : stall.goods === 'swim'
+                    ? 'Swim Club Pass!'
                     : 'Bought Craft!';
                 this.floatingLabels.push({
                   wx: stall.wx,
@@ -3248,11 +3551,21 @@ export class CitySimulation {
   }
 
   private spawnHobbyist() {
+    const hour = this.minutesOfDay / 60;
+    const calmAfterSchool = hour >= 16 || hour < 8;
     const seasonalPools: Record<SeasonType, HobbyKind[]> = {
-      Winter: ['ice_skating', 'snowball_fight', 'snowman', 'music'],
-      Autumn: ['raking_leaves', 'harvesting', 'painting', 'birdwatching', 'music'],
-      Spring: ['gardening', 'kite', 'painting', 'birdwatching', 'music'],
-      Summer: ['sunbathing', 'kite', 'painting', 'birdwatching', 'music'],
+      Winter: calmAfterSchool
+        ? ['ice_skating', 'snowman', 'bird_feeding', 'music']
+        : ['ice_skating', 'snowball_fight', 'snowman', 'bird_feeding', 'music'],
+      Autumn: calmAfterSchool
+        ? ['raking_leaves', 'harvesting', 'bird_feeding', 'painting', 'birdwatching', 'music']
+        : ['raking_leaves', 'harvesting', 'skateboarding', 'bird_feeding', 'painting', 'birdwatching', 'music'],
+      Spring: calmAfterSchool
+        ? ['gardening', 'bird_feeding', 'painting', 'birdwatching', 'music']
+        : ['gardening', 'skateboarding', 'bird_feeding', 'kite', 'painting', 'birdwatching', 'music'],
+      Summer: calmAfterSchool
+        ? ['sunbathing', 'bird_feeding', 'painting', 'birdwatching', 'music']
+        : ['sunbathing', 'skateboarding', 'bird_feeding', 'kite', 'painting', 'birdwatching', 'music'],
     };
     const pool = seasonalPools[this.season];
     const hobbyKind = pool[Math.floor(Math.random() * pool.length)];
@@ -3284,7 +3597,13 @@ export class CitySimulation {
       }
 
       if (t.terrain === 'water') continue;
-      if (t.building && t.building.category !== 'park') continue;
+      if (
+        t.building &&
+        t.building.category !== 'park' &&
+        !(t.building.category === 'crops' && (hobbyKind === 'harvesting' || hobbyKind === 'gardening'))
+      ) {
+        continue;
+      }
 
       if (hobbyKind === 'painting') {
         const nearScenic = dirs.some((d) => {
@@ -3292,7 +3611,14 @@ export class CitySimulation {
           return nt && (nt.terrain === 'water' || nt.terrain === 'forest' || nt.building?.category === 'park');
         });
         if (nearScenic && t.terrain === 'grass') candidateSpots.push(t);
-      } else if (hobbyKind === 'kite' || hobbyKind === 'snowball_fight' || hobbyKind === 'snowman' || hobbyKind === 'sunbathing') {
+      } else if (
+        hobbyKind === 'kite' ||
+        hobbyKind === 'snowball_fight' ||
+        hobbyKind === 'snowman' ||
+        hobbyKind === 'sunbathing' ||
+        hobbyKind === 'skateboarding' ||
+        hobbyKind === 'bird_feeding'
+      ) {
         if (t.building?.category === 'park' || (t.terrain === 'grass' && !t.building)) {
           const openNeighbors = dirs.filter((d) => {
             const nt = this.getTile(t.x + d.dx, t.y + d.dy);
@@ -3311,9 +3637,16 @@ export class CitySimulation {
       } else if (hobbyKind === 'raking_leaves' || hobbyKind === 'harvesting' || hobbyKind === 'gardening') {
         const nearGreen =
           t.building?.category === 'park' ||
+          t.building?.category === 'crops' ||
           dirs.some((d) => {
             const nt = this.getTile(t.x + d.dx, t.y + d.dy);
-            return nt && (nt.terrain === 'forest' || nt.building?.category === 'park' || nt.building?.category === 'residential');
+            return (
+              nt &&
+              (nt.terrain === 'forest' ||
+                nt.building?.category === 'park' ||
+                nt.building?.category === 'crops' ||
+                nt.building?.category === 'residential')
+            );
           });
         if (nearGreen && t.terrain === 'grass') candidateSpots.push(t);
       } else if (hobbyKind === 'music') {
@@ -3364,6 +3697,8 @@ export class CitySimulation {
       painting: ['#E11D48', '#8B5CF6', '#0EA5E9'],
       kite: ['#F59E0B', '#EC4899', '#10B981'],
       birdwatching: ['#65A30D', '#0D9488', '#D97706'],
+      bird_feeding: ['#65A30D', '#0EA5E9', '#D97706'],
+      skateboarding: ['#F43F5E', '#6366F1', '#14B8A6'],
       music: ['#7C3AED', '#EA580C', '#0284C7'],
       ice_skating: ['#0EA5E9', '#EC4899', '#6366F1'],
       snowball_fight: ['#DC2626', '#2563EB', '#0D9488'],
@@ -3612,8 +3947,254 @@ export class CitySimulation {
     }
   }
 
-  private updateJailAndReleases(simDt: number) {
+  private dispatchPoliceToEscapee(escapee: Person): boolean {
+    const stations = this.buildingsList.filter((b) => b.category === 'police');
+    if (stations.length === 0) return false;
+    const escX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(escapee.wx / TILE_SIZE)));
+    const escY = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(escapee.wy / TILE_SIZE)));
+    const destRoad = findAdjacentRoadTile(this.tiles, escX, escY);
+    if (!destRoad) return false;
+
+    const sorted = [...stations].sort(
+      (a, b) => Math.hypot(a.x - escX, a.y - escY) - Math.hypot(b.x - escX, b.y - escY)
+    );
+    for (const st of sorted) {
+      const startRoad = findAdjacentRoadTile(this.tiles, st.x, st.y);
+      if (!startRoad) continue;
+      const path = findRoadPath(this.tiles, startRoad, destRoad, 0.8);
+      if (!path || path.length < 1) continue;
+
+      const fullPath: GridPoint[] = [{ x: st.x, y: st.y }, ...path];
+      const p0 = fullPath[0];
+      const p1 = fullPath[1];
+      const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+
+      const cruiser: Car = {
+        id: `car_${this.carIdCounter++}`,
+        type: 'police',
+        color: '#1E293B',
+        wx: (p0.x + 0.5) * TILE_SIZE,
+        wy: (p0.y + 0.5) * TILE_SIZE,
+        angle,
+        speed: 52,
+        maxSpeed: 100,
+        path: fullPath,
+        pathIndex: 1,
+        originBuildingId: st.id,
+        destBuildingId: st.id,
+        returnStationId: st.id,
+        originCategory: 'police',
+        destCategory: 'police',
+        waitSeconds: 0,
+        isBraking: false,
+        isJammed: false,
+        hornFlash: 0,
+        sirenPhase: 0,
+        targetEscapeeId: escapee.id,
+      };
+      st.activeTripsOut += 1;
+      this.cars.push(cruiser);
+      return true;
+    }
+    return false;
+  }
+
+  private pickEscapeeTarget(esc: Person): boolean {
+    const startPt = this.getCurrentWalkableStart(esc.wx, esc.wy);
+    if (!startPt) return false;
+
+    // 45% chance to target a market stall or park/school to vandalize, else rob a commercial/residential building
+    if (this.marketStalls.length > 0 && Math.random() < 0.45) {
+      const st = this.marketStalls[Math.floor(Math.random() * this.marketStalls.length)];
+      const path = findPedestrianPath(this.tiles, startPt, { x: st.x, y: st.y });
+      if (path) {
+        esc.destStallId = st.id;
+        esc.destBuildingId = undefined;
+        esc.targetTileX = st.x;
+        esc.targetTileY = st.y;
+        esc.targetWx = st.wx;
+        esc.targetWy = st.wy;
+        esc.pedestrianPath = path;
+        esc.pedestrianPathIndex = path.length > 1 ? 1 : 0;
+        esc.state = 'escaping';
+        return true;
+      }
+    }
+
+    const targets = this.buildingsList
+      .filter(
+        (b) =>
+          b.category !== 'road_path' &&
+          b.category !== 'police' &&
+          b.category !== 'jail'
+      )
+      .sort(() => Math.random() - 0.5);
+
+    for (const dest of targets.slice(0, 6)) {
+      const path = findPedestrianPath(this.tiles, startPt, { x: dest.x, y: dest.y });
+      if (path) {
+        esc.destBuildingId = dest.id;
+        esc.destStallId = undefined;
+        esc.targetTileX = dest.x;
+        esc.targetTileY = dest.y;
+        esc.targetWx = (dest.x + 0.5) * TILE_SIZE;
+        esc.targetWy = (dest.y + 0.78) * TILE_SIZE;
+        esc.pedestrianPath = path;
+        esc.pedestrianPathIndex = path.length > 1 ? 1 : 0;
+        esc.state = 'escaping';
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private updateJailAndReleases(simDt: number, realDt: number, playAudio: boolean) {
+    // 1. Step escaped prisoners robbing & vandalizing public properties
+    for (let i = this.people.length - 1; i >= 0; i--) {
+      const esc = this.people[i];
+      if (esc.role !== 'escapee') continue;
+
+      esc.holdTimer -= simDt;
+      if (esc.holdTimer <= 0) {
+        if (!this.assignReturnRoute(esc)) {
+          this.people.splice(i, 1);
+          continue;
+        }
+      }
+
+      // Check if an idling/patrolling police officer or car catches escapee on foot
+      const cruiserNear = this.cars.find(
+        (c) =>
+          c.type === 'police' &&
+          !c.isReturningToStation &&
+          Math.hypot(c.wx - esc.wx, c.wy - esc.wy) < 16
+      );
+      if (cruiserNear) {
+        this.people.splice(i, 1);
+        this.sendToJail(1);
+        this.capturePopups.push({ wx: esc.wx, wy: esc.wy - 8, age: 0, maxAge: 1.4 });
+        this.logDailyNews('WILD CHASE: Police caught an escaped inmate hiding inside a bush—turned out they only wanted one last snack before going back to Jail!');
+        if (playAudio) soundEngine.playPoliceCapture();
+        if (cruiserNear.targetEscapeeId === esc.id) {
+          if (!this.sendVehicleBackToStation(cruiserNear, undefined, true)) {
+            this.finishTrip(cruiserNear);
+            const cIdx = this.cars.indexOf(cruiserNear);
+            if (cIdx !== -1) this.cars.splice(cIdx, 1);
+          }
+        }
+        continue;
+      }
+
+      const res = this.stepPersonAlongPath(esc, realDt, 11.5);
+      if (res === 'arrived') {
+        if (esc.state === 'returning') {
+          this.people.splice(i, 1);
+          continue;
+        }
+        // Vandalize stall or rob public property / building
+        if (esc.destStallId) {
+          const sIdx = this.marketStalls.findIndex((s) => s.id === esc.destStallId);
+          if (sIdx !== -1) {
+            const st = this.marketStalls[sIdx];
+            this.removeStallOnTile(st.x, st.y);
+            this.floatingLabels.push({
+              wx: st.wx,
+              wy: st.wy - 10,
+              text: 'Vandalized!',
+              color: '#FEF2F2',
+              bgColor: '#B91C1C',
+              age: 0,
+              maxAge: 1.8,
+            });
+            for (let k = 0; k < 6; k++) {
+              this.woodChips.push({
+                wx: st.wx,
+                wy: st.wy,
+                vx: (Math.random() - 0.5) * 40,
+                vy: -14 - Math.random() * 18,
+                age: 0,
+                maxAge: 0.55,
+                color: k % 2 === 0 ? st.awningColor : '#B45309',
+              });
+            }
+          }
+        } else if (esc.destBuildingId) {
+          const bld = this.buildingsList.find((b) => b.id === esc.destBuildingId);
+          if (bld) {
+            this.economyScore = Math.max(5, this.economyScore - 3.5);
+            this.citizenHappiness = Math.max(5, this.citizenHappiness - 2.5);
+            if (bld.category === 'park' || Math.random() < 0.35) {
+              this.startFireAt(bld.x, bld.y, true, playAudio);
+            }
+            this.floatingLabels.push({
+              wx: (bld.x + 0.5) * TILE_SIZE,
+              wy: (bld.y + 0.3) * TILE_SIZE,
+              text: 'Escapee Robbed!',
+              color: '#FEF2F2',
+              bgColor: '#EA580C',
+              age: 0,
+              maxAge: 1.8,
+            });
+          }
+        }
+        if (!this.pickEscapeeTarget(esc)) {
+          this.people.splice(i, 1);
+        }
+      } else if (res === 'blocked') {
+        if (!this.pickEscapeeTarget(esc)) {
+          this.people.splice(i, 1);
+        }
+      }
+    }
+
     if (this.prisonInmates <= 0) return;
+
+    const jails = this.buildingsList.filter((b) => b.category === 'jail');
+
+    // 2. Occasional prison breakout!
+    const activeEscapees = this.people.filter((p) => p.role === 'escapee').length;
+    if (jails.length > 0 && activeEscapees < 1) {
+      this.prisonBreakAccumulator += simDt;
+      if (this.prisonBreakAccumulator >= 78) {
+        this.prisonBreakAccumulator = 0;
+        if (Math.random() < 0.36) {
+          const jail = jails[Math.floor(Math.random() * jails.length)];
+          this.prisonInmates = Math.max(0, this.prisonInmates - 1);
+          const esc: Person = {
+            id: `ppl_${this.personIdCounter++}`,
+            role: 'escapee',
+            wx: (jail.x + 0.5) * TILE_SIZE,
+            wy: (jail.y + 0.78) * TILE_SIZE,
+            targetWx: (jail.x + 0.5) * TILE_SIZE,
+            targetWy: (jail.y + 0.78) * TILE_SIZE,
+            speed: 44,
+            shirtColor: '#F97316',
+            hatColor: '#EA580C',
+            animPhase: 0,
+            state: 'escaping',
+            homeBuildingId: jail.id,
+            holdTimer: 55,
+          };
+          if (this.pickEscapeeTarget(esc)) {
+            this.people.push(esc);
+            this.floatingLabels.push({
+              wx: (jail.x + 0.5) * TILE_SIZE,
+              wy: (jail.y + 0.22) * TILE_SIZE,
+              text: 'PRISON BREAK!',
+              color: '#FEF2F2',
+              bgColor: '#C2410C',
+              age: 0,
+              maxAge: 2.4,
+            });
+            this.logDailyNews(`WILD BREAKOUT: An inmate hopped out of ${jail.name} and dashed across town shouting "Catch me if you can!"`);
+            if (playAudio) soundEngine.playRobberyAlert();
+            this.dispatchPoliceToEscapee(esc);
+          }
+        }
+      }
+    }
+
+    // 3. Regular sentence releases
     this.prisonReleaseAccumulator += simDt;
     if (this.prisonReleaseAccumulator < 30) return;
     this.prisonReleaseAccumulator = 0;
@@ -3621,7 +4202,6 @@ export class CitySimulation {
     this.prisonInmates = Math.max(0, this.prisonInmates - 1);
     this.totalReleased += 1;
 
-    const jails = this.buildingsList.filter((b) => b.category === 'jail');
     if (jails.length === 0) return;
     const jail = jails[Math.floor(Math.random() * jails.length)];
     const destinations = this.buildingsList
@@ -3707,7 +4287,10 @@ export class CitySimulation {
         for (const p of this.people) {
           if (p.id === stall.vendorPersonId && p.state === 'vending') {
             p.stallId = undefined;
-            if (!this.assignReturnRoute(p)) p.holdTimer = 0;
+            if (!this.assignReturnRoute(p)) {
+              p.state = 'returning';
+              p.holdTimer = 0;
+            }
           }
         }
       }
@@ -3908,6 +4491,9 @@ export class CitySimulation {
               produce: '#16A34A',
               crafts: '#D97706',
               contraband: '#312E81',
+              kayak: '#0891B2',
+              rowboat: '#B45309',
+              swim: '#0284C7',
             };
             const produceFactor = Math.max(0.25, 1 - (this.crises.pollutionLevel / 100) * 0.75);
             const initialStock = isIllicit
@@ -3955,6 +4541,8 @@ export class CitySimulation {
                 ? '+Clothes Stall!'
                 : goods === 'produce'
                 ? '+Produce Stall!'
+                : goods === 'kayak'
+                ? '+Kayak Rental!'
                 : '+Craft Stall!',
               color: isIllicit ? '#E9D5FF' : isFishTainted ? '#ECFCCB' : '#F8FAFC',
               bgColor: isIllicit ? '#312E81' : isFishTainted ? '#3F6212' : awningColors[goods],
@@ -3981,8 +4569,10 @@ export class CitySimulation {
       }
 
       if (p.role === 'beggar') {
-        if (curfew && p.state !== 'returning') {
-          p.speed = Math.max(p.speed, 38);
+        const isWarPanic = this.crises.warActive || this.people.some((o) => o.role === 'invader');
+        if ((curfew || isWarPanic) && p.state !== 'returning') {
+          p.isPanicking = isWarPanic;
+          p.speed = isWarPanic ? 48 : Math.max(p.speed, 38);
           if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
           continue;
         }
@@ -4174,25 +4764,25 @@ export class CitySimulation {
         );
         if (!pedCheck) continue;
 
-        const p0 = path[0];
-        const p1 = path[1];
+        const fullPath: GridPoint[] = [{ x: st.x, y: st.y }, ...path];
+        const p0 = fullPath[0];
+        const p1 = fullPath[1];
         const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
-        const rightX = -Math.sin(angle) * LANE_OFFSET;
-        const rightY = Math.cos(angle) * LANE_OFFSET;
         const carId = `car_${this.carIdCounter++}`;
         const cruiser: Car = {
           id: carId,
           type: 'police',
           color: '#1E293B',
-          wx: (p0.x + 0.5) * TILE_SIZE + rightX,
-          wy: (p0.y + 0.5) * TILE_SIZE + rightY,
+          wx: (p0.x + 0.5) * TILE_SIZE,
+          wy: (p0.y + 0.5) * TILE_SIZE,
           angle,
           speed: 45,
           maxSpeed: 96,
-          path,
+          path: fullPath,
           pathIndex: 1,
           originBuildingId: st.id,
           destBuildingId: st.id,
+          returnStationId: st.id,
           originCategory: 'police',
           destCategory: 'police',
           waitSeconds: 0,
@@ -4205,6 +4795,7 @@ export class CitySimulation {
         st.activeTripsOut += 1;
         this.cars.push(cruiser);
         stall.raidCarId = carId;
+        this.logDailyNews(`SCANDAL: Police busted a secret outskirts stall selling "definitely normal mystery juice"—half the customers claim they were "just looking!"`);
         return true;
       }
     }
@@ -4305,9 +4896,11 @@ export class CitySimulation {
     const idx = this.cars.findIndex((c) => c.id === carId);
     if (idx !== -1) {
       const car = this.cars[idx];
-      car.parkedAtRaid = false;
-      this.finishTrip(car);
-      this.cars.splice(idx, 1);
+      if (!this.sendVehicleBackToStation(car, undefined, true)) {
+        car.parkedAtRaid = false;
+        this.finishTrip(car);
+        this.cars.splice(idx, 1);
+      }
     }
   }
 
@@ -4491,14 +5084,38 @@ export class CitySimulation {
     const originPool = cityHalls.length > 0 ? cityHalls : bases;
 
     const dirtyTargets: MapTile[] = [];
-    for (const t of this.tiles) {
-      if (!isPedestrianTileWalkable(t)) continue;
-      const nearWater =
-        this.getTile(t.x + 1, t.y)?.terrain === 'water' ||
-        this.getTile(t.x - 1, t.y)?.terrain === 'water' ||
-        this.getTile(t.x, t.y + 1)?.terrain === 'water' ||
-        this.getTile(t.x, t.y - 1)?.terrain === 'water';
-      if (nearWater || t.hasRoad) dirtyTargets.push(t);
+    // Prioritize actual littered tiles or shorelines next to ocean trash!
+    for (const tr of this.trashItems) {
+      if (!tr.inWater) {
+        const t = this.getTile(tr.x, tr.y);
+        if (t && isPedestrianTileWalkable(t)) dirtyTargets.push(t);
+      } else {
+        const dirs = [
+          { dx: 1, dy: 0 },
+          { dx: -1, dy: 0 },
+          { dx: 0, dy: 1 },
+          { dx: 0, dy: -1 },
+        ];
+        for (const d of dirs) {
+          const nt = this.getTile(tr.x + d.dx, tr.y + d.dy);
+          if (nt && isPedestrianTileWalkable(nt)) {
+            dirtyTargets.push(nt);
+            break;
+          }
+        }
+      }
+    }
+
+    if (dirtyTargets.length === 0) {
+      for (const t of this.tiles) {
+        if (!isPedestrianTileWalkable(t)) continue;
+        const nearWater =
+          this.getTile(t.x + 1, t.y)?.terrain === 'water' ||
+          this.getTile(t.x - 1, t.y)?.terrain === 'water' ||
+          this.getTile(t.x, t.y + 1)?.terrain === 'water' ||
+          this.getTile(t.x, t.y - 1)?.terrain === 'water';
+        if (nearWater || t.hasRoad) dirtyTargets.push(t);
+      }
     }
     if (dirtyTargets.length === 0) return;
 
@@ -4570,42 +5187,60 @@ export class CitySimulation {
     }
   }
 
-  public spawnInvadingArmy(count = 3) {
+  public spawnInvadingArmy(count = 4) {
     const targets = this.buildingsList.filter((b) => b.category !== 'road_path');
     if (targets.length === 0) return;
     const cityHalls = targets.filter((b) => b.category === 'city_hall');
 
-    // Invading armies enter from walkable perimeter edges of the map
-    const borderEntries: MapTile[] = [];
+    // Invading foreign nation forces & armored tanks enter from the 4 corners and perimeter edges (crossing roads/bridges/rivers if needed)
+    const cornerEntries: MapTile[] = [];
+    const edgeEntries: MapTile[] = [];
     for (const t of this.tiles) {
+      const inCorner =
+        (t.x <= 2 || t.x >= GRID_COLS - 3) && (t.y <= 2 || t.y >= GRID_ROWS - 3);
       const onEdge = t.x === 0 || t.y === 0 || t.x === GRID_COLS - 1 || t.y === GRID_ROWS - 1;
-      if (onEdge && isPedestrianTileWalkable(t)) {
-        borderEntries.push(t);
-      }
+      if (inCorner) cornerEntries.push(t);
+      else if (onEdge) edgeEntries.push(t);
     }
-    if (borderEntries.length === 0) return;
+    const entryPool = cornerEntries.length > 0 || edgeEntries.length > 0 ? [...cornerEntries, ...edgeEntries] : [];
+    if (entryPool.length === 0) return;
+
+    let spawnedCount = 0;
+    let announcedWx: number | undefined;
+    let announcedWy: number | undefined;
 
     for (let k = 0; k < count; k++) {
-      const entry = borderEntries[Math.floor(Math.random() * borderEntries.length)];
-      const dest =
-        cityHalls.length > 0 && (this.mayorAlive ? Math.random() < 0.65 : Math.random() < 0.4)
-          ? cityHalls[0]
-          : targets[Math.floor(Math.random() * targets.length)];
-      const path = findPedestrianPath(this.tiles, { x: entry.x, y: entry.y }, { x: dest.x, y: dest.y });
+      const preferCorner = cornerEntries.length > 0 && Math.random() < 0.6;
+      const sourcePool = preferCorner ? cornerEntries : entryPool;
+      const entry = sourcePool[Math.floor(Math.random() * sourcePool.length)];
+      const aimAtHall = cityHalls.length > 0 && (k === 0 || (this.mayorAlive && Math.random() < 0.55));
+      const dest = aimAtHall
+        ? cityHalls[0]
+        : targets[Math.floor(Math.random() * targets.length)];
+      const path = findPedestrianPath(this.tiles, { x: entry.x, y: entry.y }, { x: dest.x, y: dest.y }, false, true);
       if (!path) continue;
+      const hasTank = k === 0 || Math.random() < 0.48;
+      const wx = (entry.x + 0.5) * TILE_SIZE;
+      const wy = (entry.y + 0.5) * TILE_SIZE;
+      if (announcedWx === undefined) {
+        announcedWx = wx;
+        announcedWy = wy;
+      }
       this.people.push({
         id: `ppl_${this.personIdCounter++}`,
         role: 'invader',
-        wx: (entry.x + 0.5) * TILE_SIZE,
-        wy: (entry.y + 0.5) * TILE_SIZE,
+        hasTank,
+        health: hasTank ? 4 : 2,
+        wx,
+        wy,
         targetWx: (dest.x + 0.5) * TILE_SIZE,
         targetWy: (dest.y + 0.78) * TILE_SIZE,
-        speed: 31,
+        speed: hasTank ? 28 : 34,
         shirtColor: '#991B1B',
         hatColor: '#450A0A',
         animPhase: Math.random() * Math.PI * 2,
         state: 'invading',
-        shootCooldown: 2.0 + Math.random() * 2.5,
+        shootCooldown: 0.9 + Math.random() * 1.4,
         destBuildingId: dest.id,
         targetTileX: dest.x,
         targetTileY: dest.y,
@@ -4613,6 +5248,20 @@ export class CitySimulation {
         pedestrianPathIndex: path.length > 1 ? 1 : 0,
         holdTimer: 0,
       });
+      spawnedCount++;
+    }
+
+    if (spawnedCount > 0 && announcedWx !== undefined && announcedWy !== undefined) {
+      this.floatingLabels.push({
+        wx: announcedWx,
+        wy: announcedWy - 12,
+        text: 'FOREIGN INVASION!',
+        color: '#FEF2F2',
+        bgColor: '#991B1B',
+        age: 0,
+        maxAge: 2.2,
+      });
+      this.logDailyNews(`FOREIGN INVASION! Armies and tanks crossed the border of ${this.mapName} firing at buildings and marching on City Hall!`);
     }
   }
 
@@ -4627,7 +5276,7 @@ export class CitySimulation {
     } else if (this.people.filter((p) => p.role === 'soldier').length < 2) {
       this.spawnSoldierPatrol(2);
     }
-    this.spawnInvadingArmy(3);
+    this.spawnInvadingArmy(4);
     if (playAudio) soundEngine.playCrisisAlert();
     return true;
   }
@@ -4829,6 +5478,7 @@ export class CitySimulation {
     // Mayor automatically dispatches repair crews & cleaners immediately
     this.dispatchMayorRepairCrew(3);
     this.dispatchMayorCleaners(2);
+    this.logDailyNews(`KABOOM?! A massive crater popped up in ${this.describeArea(tx, ty)}—local guy Bob swears it's "honestly just a dramatic pothole."`);
     if (playAudio) soundEngine.playNukeExplosion();
     return true;
   }
@@ -4987,6 +5637,7 @@ export class CitySimulation {
     let businesses = 0;
     let workplaces = 0;
     let factories = 0;
+    let cropsCount = 0;
     for (const b of this.buildingsList) {
       if (b.category === 'commercial' || b.category === 'visit_spot' || b.category === 'landmark') {
         businesses++;
@@ -4994,6 +5645,8 @@ export class CitySimulation {
         workplaces++;
       } else if (b.category === 'factory') {
         factories++;
+      } else if (b.category === 'crops') {
+        cropsCount++;
       }
     }
 
@@ -5008,7 +5661,11 @@ export class CitySimulation {
     const cleanFishStalls = this.marketStalls.filter((s) => !s.isContaminated).length;
     const taintedStalls = this.marketStalls.filter((s) => s.isContaminated).length;
 
-    const businessBoost = Math.min(28, businesses * 2.5 + workplaces * 3.0 + factories * 4.5);
+    const cropMult = this.crises.pollutionLevel >= 35 ? 0.5 : 1.0;
+    const businessBoost = Math.min(
+      32,
+      businesses * 2.5 + workplaces * 3.0 + factories * 4.5 + cropsCount * 3.0 * cropMult
+    );
     const stallBoost = Math.min(10, cleanFishStalls * 2.0);
     const trafficBonus = flowPct >= 75 ? 8 : flowPct >= 55 ? 3 : 0;
     const cleanWaterBonus = this.crises.pollutionLevel < 20 ? 4 : 0;
@@ -5171,7 +5828,7 @@ export class CitySimulation {
           ? { x: targets[Math.floor(Math.random() * targets.length)].x, y: targets[Math.floor(Math.random() * targets.length)].y }
           : null;
       if (!destPt) return;
-      const path = findPedestrianPath(this.tiles, { x: base.x, y: base.y }, destPt);
+      const path = findPedestrianPath(this.tiles, { x: base.x, y: base.y }, destPt, false, this.crises.warActive);
       if (!path) continue;
       this.people.push({
         id: `ppl_${this.personIdCounter++}`,
@@ -5233,37 +5890,68 @@ export class CitySimulation {
       }
     }
 
-    // 1. Ambient & Active Pollution + Mayor Cleanup Crews (includes Factories!)
+    // 1. Ocean Trash & Pollution + Mayor Cleanup Crews (water turns polluted when ocean trash piles up!)
     const workplaces = this.buildingsList.filter((b) => b.category === 'workplace').length;
     const factories = this.buildingsList.filter((b) => b.category === 'factory').length;
-    const jammedCarsCount = this.cars.filter((c) => c.isJammed).length;
+    const oceanTrash = this.trashItems.filter((t) => t.inWater).length;
+    const landTrash = this.trashItems.filter((t) => !t.inWater).length;
+
     this.pollutionTickAccumulator += simDt;
     if (this.pollutionTickAccumulator >= 2.0) {
       this.pollutionTickAccumulator = 0;
+      const trashEmission = oceanTrash * 0.32 + landTrash * 0.05;
       const emission =
-        (this.crises.pollutionActive ? 1.15 : 0) +
-        workplaces * 0.06 +
-        factories * 0.22 +
-        jammedCarsCount * 0.04;
-      if (emission > 0) {
-        const cap = this.crises.pollutionActive ? 100 : factories > 0 ? 44 : 28;
-        this.crises.pollutionLevel = Math.min(cap, this.crises.pollutionLevel + emission);
-      } else if (!this.crises.pollutionActive && this.crises.pollutionLevel > 0) {
-        this.crises.pollutionLevel = Math.max(0, this.crises.pollutionLevel - 0.35);
+        (this.crises.pollutionActive ? 1.1 : 0) +
+        (oceanTrash >= 10 ? 2.4 : 0) +
+        workplaces * 0.03 +
+        factories * 0.14 +
+        trashEmission;
+
+      if (oceanTrash >= 10 && !this.crises.pollutionActive && this.crises.pollutionLevel < 42) {
+        this.crises.pollutionLevel = 42;
+        this.logDailyNews('HOT TAKE: Someone dumped way too much trash into the ocean and now the fish look grumpy—Mayor yelled "Grab a mop, everyone!"');
+        const hall = this.buildingsList.find((b) => b.category === 'city_hall');
+        if (hall && this.mayorAlive && this.mayorSpeeches.length === 0) {
+          this.mayorSpeeches.push({
+            id: `sp_${this.speechIdCounter++}`,
+            cityHallId: hall.id,
+            x: hall.x,
+            y: hall.y,
+            topic: 'Ocean trash is polluting our waters! Clean it up!',
+            kind: 'civic',
+            elapsedSeconds: 0,
+            durationSeconds: 18,
+          });
+        }
+        this.dispatchMayorCleaners(2);
+      }
+
+      if (emission > 0.25) {
+        const cap = this.crises.pollutionActive || oceanTrash >= 10 ? 100 : factories > 0 ? 22 : 12;
+        if (this.crises.pollutionLevel < cap) {
+          this.crises.pollutionLevel = Math.min(cap, this.crises.pollutionLevel + emission);
+        } else if (!this.crises.pollutionActive && oceanTrash < 10) {
+          this.crises.pollutionLevel = Math.max(cap, this.crises.pollutionLevel - 0.35);
+        }
+      } else if (!this.crises.pollutionActive && oceanTrash < 5 && this.crises.pollutionLevel > 0) {
+        this.crises.pollutionLevel = Math.max(0, this.crises.pollutionLevel - 0.45);
       }
     }
 
     if (this.crises.pollutionActive) {
       this.crises.pollutionRemaining = Math.max(0, this.crises.pollutionRemaining - simDt);
-      if (this.crises.pollutionRemaining <= 0) {
+      if (this.crises.pollutionRemaining <= 0 && oceanTrash < 10) {
         this.crises.pollutionActive = false;
       }
     }
 
-    // Mayor dispatches cleaners when pollution >= 18
+    // Mayor dispatches cleaners when pollution >= 18 or trash accumulates
     const activeCleaners = this.people.filter((p) => p.role === 'cleaner').length;
-    if ((this.crises.pollutionActive || this.crises.pollutionLevel >= 18) && activeCleaners < 3) {
-      if (Math.random() < realDt * 0.45) {
+    if (
+      (this.crises.pollutionActive || this.crises.pollutionLevel >= 18 || this.trashItems.length >= 4) &&
+      activeCleaners < 3
+    ) {
+      if (Math.random() < realDt * 0.5) {
         this.dispatchMayorCleaners(1);
       }
     }
@@ -5293,15 +5981,24 @@ export class CitySimulation {
           p.animPhase += realDt * 8;
           p.holdTimer -= realDt;
           if (p.holdTimer <= 0) {
-            this.crises.pollutionLevel = Math.max(0, this.crises.pollutionLevel - 9);
-            if (this.crises.pollutionLevel <= 4) {
+            // Remove up to 2 nearby trash items (including coastal ocean trash!)
+            let picked = 0;
+            for (let tIdx = this.trashItems.length - 1; tIdx >= 0 && picked < 2; tIdx--) {
+              const tr = this.trashItems[tIdx];
+              if (Math.hypot(tr.wx - p.wx, tr.wy - p.wy) <= TILE_SIZE * 2.1) {
+                this.trashItems.splice(tIdx, 1);
+                picked++;
+              }
+            }
+            this.crises.pollutionLevel = Math.max(0, this.crises.pollutionLevel - (picked > 0 ? 11 : 8));
+            if (this.crises.pollutionLevel <= 6 && this.trashItems.filter((t) => t.inWater).length < 6) {
               this.crises.pollutionActive = false;
               this.crises.pollutionRemaining = 0;
             }
             this.floatingLabels.push({
               wx: p.wx,
               wy: p.wy - 10,
-              text: '+Cleaned!',
+              text: picked > 0 ? '+Trash Cleared!' : '+Cleaned!',
               color: '#F8FAFC',
               bgColor: '#0284C7',
               age: 0,
@@ -5545,10 +6242,10 @@ export class CitySimulation {
 
         // Periodic invading army waves from city perimeter
         this.invasionTickAccumulator += simDt;
-        if (this.invasionTickAccumulator >= 14) {
+        if (this.invasionTickAccumulator >= 12) {
           this.invasionTickAccumulator = 0;
-          if (activeInvaders.length < 6) {
-            this.spawnInvadingArmy(2);
+          if (activeInvaders.length < 8) {
+            this.spawnInvadingArmy(3);
           }
         }
 
@@ -5586,34 +6283,28 @@ export class CitySimulation {
       }
     }
 
-    // Step defenders & invaders + skirmish combat & shootings
+    // Step defenders & invaders + skirmish combat, shootings & building destruction
     if (this.crises.warActive || activeInvaders.length > 0 || activeDefenders.length > 0) {
       for (let i = this.people.length - 1; i >= 0; i--) {
         const p = this.people[i];
         if (p.role === 'soldier') {
+          p.shootCooldown = Math.max(0, (p.shootCooldown || 0) - simDt);
           const foeIdx = this.people.findIndex(
-            (f) => f.role === 'invader' && Math.hypot(f.wx - p.wx, f.wy - p.wy) < 16
+            (f) => f.role === 'invader' && Math.hypot(f.wx - p.wx, f.wy - p.wy) < 78
           );
-          if (foeIdx !== -1) {
+          if (foeIdx !== -1 && p.shootCooldown <= 0) {
             const foe = this.people[foeIdx];
+            p.shootCooldown = 1.9;
             this.gunfireTracers.push({
               x1: p.wx,
               y1: p.wy - 4,
               x2: foe.wx,
               y2: foe.wy - 4,
               age: 0,
-              maxAge: 0.22,
+              maxAge: 0.24,
               color: '#38BDF8',
             });
-            this.floatingLabels.push({
-              wx: foe.wx,
-              wy: foe.wy - 10,
-              text: 'Repelled!',
-              color: '#F8FAFC',
-              bgColor: '#1D4ED8',
-              age: 0,
-              maxAge: 1.3,
-            });
+            if (playAudio) soundEngine.playGunshot();
             for (let s = 0; s < 5; s++) {
               this.smokeParticles.push({
                 wx: foe.wx,
@@ -5626,22 +6317,53 @@ export class CitySimulation {
                 color: 'rgba(250, 204, 21, 0.8)',
               });
             }
-            this.people.splice(foeIdx, 1);
-            if (foeIdx < i) i -= 1;
+            if ((foe.health ?? 2) > 1) {
+              foe.health = (foe.health ?? 2) - 1;
+              this.floatingLabels.push({
+                wx: foe.wx,
+                wy: foe.wy - 12,
+                text: foe.hasTank ? 'Tank Hit!' : 'Hit!',
+                color: '#FEF9C3',
+                bgColor: '#0284C7',
+                age: 0,
+                maxAge: 1.0,
+              });
+            } else {
+              this.floatingLabels.push({
+                wx: foe.wx,
+                wy: foe.wy - 10,
+                text: foe.hasTank ? 'Tank Destroyed!' : 'Repelled!',
+                color: '#F8FAFC',
+                bgColor: '#1D4ED8',
+                age: 0,
+                maxAge: 1.3,
+              });
+              this.people.splice(foeIdx, 1);
+              if (foeIdx < i) i -= 1;
+            }
             continue;
           }
           const res = this.stepPersonAlongPath(p, realDt, 9.5);
           if (res !== 'moving') {
-            if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+            const liveFoe = this.people.find((f) => f.role === 'invader');
+            if (liveFoe) {
+              const fx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(liveFoe.wx / TILE_SIZE)));
+              const fy = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(liveFoe.wy / TILE_SIZE)));
+              if (!this.assignPedestrianRoute(p, fx, fy, liveFoe.wx, liveFoe.wy)) {
+                if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+              }
+            } else if (!this.assignReturnRoute(p)) {
+              this.people.splice(i, 1);
+            }
           }
         } else if (p.role === 'invader') {
           p.shootCooldown = Math.max(0, (p.shootCooldown || 0) - simDt);
 
           if (p.shootCooldown <= 0) {
-            // Check if Mayor is in range first
+            // 1. Shoot Mayor first if within long line of sight
             const mayorIdx = this.mayorAlive
               ? this.people.findIndex(
-                  (m) => m.role === 'mayor' && Math.hypot(m.wx - p.wx, m.wy - p.wy) < 82
+                  (m) => m.role === 'mayor' && Math.hypot(m.wx - p.wx, m.wy - p.wy) < 115
                 )
               : -1;
             if (mayorIdx !== -1) {
@@ -5653,22 +6375,24 @@ export class CitySimulation {
                 x2: mayor.wx,
                 y2: mayor.wy - 4,
                 age: 0,
-                maxAge: 0.28,
+                maxAge: 0.3,
                 color: '#EF4444',
               });
-              for (let s = 0; s < 5; s++) {
+              if (playAudio) soundEngine.playGunshot();
+              for (let s = 0; s < 6; s++) {
                 this.smokeParticles.push({
                   wx: mayor.wx + (Math.random() - 0.5) * 6,
                   wy: mayor.wy - 4,
                   vx: (Math.random() - 0.5) * 14,
                   vy: -12 - Math.random() * 8,
                   age: 0,
-                  maxAge: 0.7,
-                  size: 3,
-                  color: 'rgba(239, 68, 68, 0.75)',
+                  maxAge: 0.75,
+                  size: 3.2,
+                  color: 'rgba(239, 68, 68, 0.8)',
                 });
               }
               this.mayorAlive = false;
+              this.logDailyNews('HEARTBREAK & CHAOS: The Mayor fell defending City Hall from foreign invaders! Citizens are demanding an emergency election.');
               if (hall) {
                 this.spawnDeathEvent(hall, playAudio);
               }
@@ -5683,15 +6407,15 @@ export class CitySimulation {
               });
               this.people.splice(mayorIdx, 1);
               if (mayorIdx < i) i -= 1;
-              p.shootCooldown = 4.5 + Math.random() * 3.0;
+              p.shootCooldown = 2.0 + Math.random() * 1.4;
               if (playAudio) soundEngine.playDeathChime();
             } else {
-              // Shoot nearby citizens in range
+              // 2. Shoot nearby defenders or citizens in range
               const victimIdx = this.people.findIndex(
                 (v) =>
                   v.role !== 'invader' &&
                   v.role !== 'mayor' &&
-                  Math.hypot(v.wx - p.wx, v.wy - p.wy) < 72
+                  Math.hypot(v.wx - p.wx, v.wy - p.wy) < 82
               );
               if (victimIdx !== -1) {
                 const victim = this.people[victimIdx];
@@ -5701,9 +6425,10 @@ export class CitySimulation {
                   x2: victim.wx,
                   y2: victim.wy - 4,
                   age: 0,
-                  maxAge: 0.24,
+                  maxAge: 0.25,
                   color: '#EF4444',
                 });
+                if (playAudio) soundEngine.playGunshot();
                 for (let s = 0; s < 4; s++) {
                   this.smokeParticles.push({
                     wx: victim.wx,
@@ -5733,23 +6458,154 @@ export class CitySimulation {
                 }
                 this.people.splice(victimIdx, 1);
                 if (victimIdx < i) i -= 1;
-                p.shootCooldown = 5.5 + Math.random() * 4.0;
+                p.shootCooldown = 1.8 + Math.random() * 1.5;
+              } else {
+                // 3. Fire warning/bombardment tracers at nearby buildings while advancing
+                const nearBld = this.buildingsList.find(
+                  (b) =>
+                    b.category !== 'road_path' &&
+                    Math.hypot((b.x + 0.5) * TILE_SIZE - p.wx, (b.y + 0.5) * TILE_SIZE - p.wy) < 96
+                );
+                if (nearBld) {
+                  const bx = (nearBld.x + 0.5) * TILE_SIZE;
+                  const by = (nearBld.y + 0.45) * TILE_SIZE;
+                  this.gunfireTracers.push({
+                    x1: p.wx,
+                    y1: p.wy - 4,
+                    x2: bx,
+                    y2: by,
+                    age: 0,
+                    maxAge: 0.24,
+                    color: p.hasTank ? '#F97316' : '#EF4444',
+                  });
+                  if (playAudio) soundEngine.playGunshot();
+                  for (let s = 0; s < 4; s++) {
+                    this.smokeParticles.push({
+                      wx: bx + (Math.random() - 0.5) * 8,
+                      wy: by,
+                      vx: (Math.random() - 0.5) * 18,
+                      vy: -12 - Math.random() * 10,
+                      age: 0,
+                      maxAge: 0.6,
+                      size: 3.0,
+                      color: 'rgba(249, 115, 22, 0.78)',
+                    });
+                  }
+                  p.shootCooldown = 2.0 + Math.random() * 1.4;
+                }
               }
             }
           }
 
           const res = this.stepPersonAlongPath(p, realDt, 8.5);
           if (res === 'arrived') {
-            // Invader reaches building (e.g. City Hall): small fire or target next building
-            if (
-              p.targetTileX !== undefined &&
-              p.targetTileY !== undefined &&
-              Math.random() < 0.45 &&
-              this.fires.filter((f) => f.status === 'active').length < 3
-            ) {
-              this.startFireAt(p.targetTileX, p.targetTileY, false, playAudio);
+            const targetTile =
+              p.targetTileX !== undefined && p.targetTileY !== undefined
+                ? this.getTile(p.targetTileX, p.targetTileY)
+                : null;
+            if (targetTile?.building) {
+              const hitBld = targetTile.building;
+              if (hitBld.category === 'city_hall') {
+                // Assaulting City Hall kills Mayor even if standing inside City Hall
+                if (this.mayorAlive) {
+                  this.mayorAlive = false;
+                  const mIdx = this.people.findIndex((m) => m.role === 'mayor');
+                  if (mIdx !== -1) {
+                    this.people.splice(mIdx, 1);
+                    if (mIdx < i) i -= 1;
+                  }
+                  this.spawnDeathEvent(hitBld, playAudio);
+                  this.floatingLabels.push({
+                    wx: (hitBld.x + 0.5) * TILE_SIZE,
+                    wy: (hitBld.y + 0.35) * TILE_SIZE,
+                    text: 'MAYOR KILLED!',
+                    color: '#FEF2F2',
+                    bgColor: '#991B1B',
+                    age: 0,
+                    maxAge: 2.6,
+                  });
+                  this.logDailyNews('HEARTBREAK & CHAOS: Foreign troops stormed City Hall and killed the Mayor! Emergency elections will follow once troops withdraw.');
+                  if (playAudio) soundEngine.playDeathChime();
+                }
+              } else if (hitBld.category !== 'road_path') {
+                // Foreign invaders destroy non-City-Hall buildings!
+                const bx = (targetTile.x + 0.5) * TILE_SIZE;
+                const by = (targetTile.y + 0.5) * TILE_SIZE;
+                this.floatingLabels.push({
+                  wx: bx,
+                  wy: by - 10,
+                  text: p.hasTank ? 'TANK DESTROYED BLDG!' : 'BUILDING DESTROYED!',
+                  color: '#FEF2F2',
+                  bgColor: '#991B1B',
+                  age: 0,
+                  maxAge: 2.3,
+                });
+                for (let d = 0; d < 8; d++) {
+                  this.woodChips.push({
+                    wx: bx,
+                    wy: by,
+                    vx: (Math.random() - 0.5) * 44,
+                    vy: -16 - Math.random() * 20,
+                    age: 0,
+                    maxAge: 0.7,
+                    color: d % 2 === 0 ? '#78350F' : '#64748B',
+                  });
+                  this.smokeParticles.push({
+                    wx: bx + (Math.random() - 0.5) * 10,
+                    wy: by,
+                    vx: (Math.random() - 0.5) * 20,
+                    vy: -16 - Math.random() * 14,
+                    age: 0,
+                    maxAge: 1.0,
+                    size: 4.0,
+                    color: 'rgba(51, 65, 85, 0.8)',
+                  });
+                }
+                if (
+                  !this.blastCraters.some((c) => c.x === targetTile.x && c.y === targetTile.y) &&
+                  this.blastCraters.length < 18
+                ) {
+                  this.blastCraters.push({
+                    id: `crater_${this.craterIdCounter++}`,
+                    x: targetTile.x,
+                    y: targetTile.y,
+                    wx: bx,
+                    wy: by,
+                    radius: p.hasTank ? 12 : 9,
+                    age: 0,
+                  });
+                }
+                this.spawnDeathEvent(hitBld, false);
+                this.logDailyNews(`WAR WRECKAGE: Invading forces shelled and destroyed ${hitBld.name} in ${this.describeArea(targetTile.x, targetTile.y)}!`);
+                targetTile.building = null;
+                this.rebuildCaches();
+                if (this.fires.filter((f) => f.status === 'active').length < 4 && Math.random() < 0.7) {
+                  this.startFireAt(targetTile.x, targetTile.y, false, playAudio);
+                }
+              }
             }
-            if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+
+            // Pick another building/City Hall to raid while war is active; withdraw only once war ends
+            const raidPool = this.buildingsList.filter((b) => b.category !== 'road_path');
+            let retargeted = false;
+            if (this.crises.warActive && raidPool.length > 0) {
+              const cityHall = raidPool.find((b) => b.category === 'city_hall');
+              const nextTarget =
+                this.mayorAlive && cityHall && Math.random() < 0.55
+                  ? cityHall
+                  : raidPool[Math.floor(Math.random() * raidPool.length)];
+              retargeted = this.assignPedestrianRoute(
+                p,
+                nextTarget.x,
+                nextTarget.y,
+                (nextTarget.x + 0.5) * TILE_SIZE,
+                (nextTarget.y + 0.78) * TILE_SIZE
+              );
+              if (retargeted) p.destBuildingId = nextTarget.id;
+            }
+            if (!retargeted) {
+              this.people.splice(i, 1);
+            }
           } else if (res === 'blocked') {
             this.people.splice(i, 1);
           }
@@ -5842,6 +6698,7 @@ export class CitySimulation {
             age: 0,
             maxAge: 2.6,
           });
+          this.logDailyNews(`ELECTION DRAMA: Voters picked a brand-new Mayor at ${hall.name}! Half the town cheered, and Uncle Leo already wants free Pizza Fridays.`);
           this.citizenHappiness = Math.min(100, this.citizenHappiness + 8);
           this.economyScore = Math.min(100, this.economyScore + 5);
           if (playAudio) soundEngine.playCelebrationFanfare();
@@ -6320,26 +7177,26 @@ export class CitySimulation {
 
     if (!bestStation || !bestPath) return false;
 
-    const p0 = bestPath[0];
-    const p1 = bestPath[1];
+    const fullPath: GridPoint[] = [{ x: bestStation.x, y: bestStation.y }, ...bestPath];
+    const p0 = fullPath[0];
+    const p1 = fullPath[1];
     const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
-    const rightX = -Math.sin(angle) * LANE_OFFSET;
-    const rightY = Math.cos(angle) * LANE_OFFSET;
 
     const carId = `car_${this.carIdCounter++}`;
     const cruiser: Car = {
       id: carId,
       type: 'police',
       color: '#1E293B',
-      wx: (p0.x + 0.5) * TILE_SIZE + rightX,
-      wy: (p0.y + 0.5) * TILE_SIZE + rightY,
+      wx: (p0.x + 0.5) * TILE_SIZE,
+      wy: (p0.y + 0.5) * TILE_SIZE,
       angle,
       speed: 45,
       maxSpeed: 94,
-      path: bestPath,
+      path: fullPath,
       pathIndex: 1,
       originBuildingId: bestStation.id,
       destBuildingId: incident.cityHallId,
+      returnStationId: bestStation.id,
       originCategory: 'police',
       destCategory: 'city_hall',
       waitSeconds: 0,
@@ -6407,9 +7264,11 @@ export class CitySimulation {
     const idx = this.cars.findIndex((c) => c.id === carId);
     if (idx !== -1) {
       const car = this.cars[idx];
-      car.parkedAtProtest = false;
-      this.finishTrip(car);
-      this.cars.splice(idx, 1);
+      if (!this.sendVehicleBackToStation(car, undefined, true)) {
+        car.parkedAtProtest = false;
+        this.finishTrip(car);
+        this.cars.splice(idx, 1);
+      }
     }
   }
 
@@ -7201,26 +8060,26 @@ export class CitySimulation {
 
     if (!bestStation || !bestPath) return false;
 
-    const p0 = bestPath[0];
-    const p1 = bestPath[1];
+    const fullPath: GridPoint[] = [{ x: bestStation.x, y: bestStation.y }, ...bestPath];
+    const p0 = fullPath[0];
+    const p1 = fullPath[1];
     const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
-    const rightX = -Math.sin(angle) * LANE_OFFSET;
-    const rightY = Math.cos(angle) * LANE_OFFSET;
 
     const carId = `car_${this.carIdCounter++}`;
     const truck: Car = {
       id: carId,
       type: 'firetruck',
       color: '#DC2626',
-      wx: (p0.x + 0.5) * TILE_SIZE + rightX,
-      wy: (p0.y + 0.5) * TILE_SIZE + rightY,
+      wx: (p0.x + 0.5) * TILE_SIZE,
+      wy: (p0.y + 0.5) * TILE_SIZE,
       angle,
       speed: 78,
       maxSpeed: 145,
-      path: bestPath,
+      path: fullPath,
       pathIndex: 1,
       originBuildingId: bestStation.id,
       destBuildingId: fire.buildingId || bestStation.id,
+      returnStationId: bestStation.id,
       originCategory: 'fire_station',
       destCategory: 'residential',
       waitSeconds: 0,
@@ -7310,9 +8169,11 @@ export class CitySimulation {
     const idx = this.cars.findIndex((c) => c.id === carId);
     if (idx !== -1) {
       const car = this.cars[idx];
-      car.parkedAtFire = false;
-      this.finishTrip(car);
-      this.cars.splice(idx, 1);
+      if (!this.sendVehicleBackToStation(car, car.returnStationId, false)) {
+        car.parkedAtFire = false;
+        this.finishTrip(car);
+        this.cars.splice(idx, 1);
+      }
     }
   }
 
@@ -7367,9 +8228,52 @@ export class CitySimulation {
     if (activeCount >= 1 || this.cars.length < 4) return;
 
     this.crashCheckAccumulator += simDt;
-    if (this.crashCheckAccumulator < 44) return;
+    if (this.crashCheckAccumulator < 120) return;
 
-    // Look for two civilian cars in a tight near-collision (crossing intersection or fast rear-end)
+    // 1. Occasional collision when a speeding responder overtakes close civilian traffic
+    for (let i = 0; i < this.cars.length; i++) {
+      const em = this.cars[i];
+      const isEmerg = em.type === 'ambulance' || em.type === 'police' || em.type === 'firetruck';
+      if (
+        !isEmerg ||
+        em.isReturningToStation ||
+        em.pathIndex <= 1 ||
+        em.speed < 64 ||
+        em.parkedAtProtest ||
+        em.parkedAtFire ||
+        em.parkedAtCrash ||
+        em.parkedAtRaid
+      ) {
+        continue;
+      }
+      for (let j = 0; j < this.cars.length; j++) {
+        if (i === j) continue;
+        const civ = this.cars[j];
+        if (
+          civ.type === 'ambulance' ||
+          civ.type === 'police' ||
+          civ.type === 'firetruck' ||
+          civ.parkedAtCrash ||
+          civ.pathIndex < 1
+        ) {
+          continue;
+        }
+        const d = Math.hypot(em.wx - civ.wx, em.wy - civ.wy);
+        if (d > 10.5) continue;
+        const tx = Math.floor(((em.wx + civ.wx) * 0.5) / TILE_SIZE);
+        const ty = Math.floor(((em.wy + civ.wy) * 0.5) / TILE_SIZE);
+        const tile = this.getTile(tx, ty);
+        if (!tile || !tile.hasRoad) continue;
+        if (this.crashes.some((c) => Math.abs(c.x - tx) <= 1 && Math.abs(c.y - ty) <= 1)) continue;
+        this.crashCheckAccumulator = 0;
+        if (Math.random() < 0.14) {
+          this.triggerCarCrash(i, j, playAudio, true);
+        }
+        return;
+      }
+    }
+
+    // 2. Look for two civilian cars in a tight near-collision (unsignaled intersection or high speed)
     let bestPair: [number, number] | null = null;
     let bestDist = Infinity;
 
@@ -7386,7 +8290,7 @@ export class CitySimulation {
       ) {
         continue;
       }
-      if (a.speed < 14) continue;
+      if (a.speed < 20) continue;
 
       for (let j = i + 1; j < this.cars.length; j++) {
         const b = this.cars[j];
@@ -7401,10 +8305,10 @@ export class CitySimulation {
         ) {
           continue;
         }
-        if (b.speed < 10) continue;
+        if (b.speed < 16) continue;
 
         const d = Math.hypot(a.wx - b.wx, a.wy - b.wy);
-        if (d > 19) continue;
+        if (d > 13.5) continue;
 
         const midWx = (a.wx + b.wx) * 0.5;
         const midWy = (a.wy + b.wy) * 0.5;
@@ -7418,7 +8322,7 @@ export class CitySimulation {
         const atIntersection = isIntersectionTile(this.tiles, tx, ty);
         const unsignaled = atIntersection && tile.intersection.controlType !== 'signal';
         const isCrossing = headingDot < 0.45;
-        const isFastClose = d < 16 && (a.speed > 26 || b.speed > 26);
+        const isFastClose = d < 12 && (a.speed > 34 || b.speed > 34);
 
         if ((isCrossing || unsignaled || isFastClose) && d < bestDist) {
           bestDist = d;
@@ -7437,14 +8341,19 @@ export class CitySimulation {
       const tile = this.getTile(tx, ty);
       const unsignaled =
         tile && isIntersectionTile(this.tiles, tx, ty) && tile.intersection.controlType !== 'signal';
-      const chance = unsignaled ? 0.42 : 0.22;
+      const chance = unsignaled ? 0.16 : 0.06;
       if (Math.random() < chance) {
         this.triggerCarCrash(idxA, idxB, playAudio);
       }
     }
   }
 
-  private triggerCarCrash(idxA: number, idxB: number, playAudio: boolean): CrashIncident | null {
+  private triggerCarCrash(
+    idxA: number,
+    idxB: number,
+    playAudio: boolean,
+    isEmergencyCollision = false
+  ): CrashIncident | null {
     const firstIdx = Math.max(idxA, idxB);
     const secondIdx = Math.min(idxA, idxB);
     const carA = this.cars[firstIdx];
@@ -7456,8 +8365,33 @@ export class CitySimulation {
     const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(wx / TILE_SIZE)));
     const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(wy / TILE_SIZE)));
 
-    // Decrement active trip counters cleanly for the two crashed cars
+    // Reset mission dispatch flags & decrement active trip counters cleanly for the two crashed cars
     for (const crashedCar of [carA, carB]) {
+      if (crashedCar.targetFireId) {
+        const fire = this.fires.find((f) => f.id === crashedCar.targetFireId && f.status === 'active');
+        if (fire && fire.fireTruckCarId === crashedCar.id) {
+          fire.fireTruckDispatched = false;
+          fire.fireTruckCarId = undefined;
+        }
+      }
+      if (crashedCar.targetRobberyId) {
+        const rob = this.robberies.find((r) => r.id === crashedCar.targetRobberyId && r.status === 'active');
+        if (rob) rob.policeDispatched = false;
+      }
+      if (crashedCar.targetProtestId) {
+        const prot = this.protests.find((p) => p.id === crashedCar.targetProtestId && p.status === 'active');
+        if (prot && prot.policeCarId === crashedCar.id) {
+          prot.policeDispatched = false;
+          prot.policeCarId = undefined;
+        }
+      }
+      if (crashedCar.targetRaidStallId) {
+        const st = this.marketStalls.find((s) => s.id === crashedCar.targetRaidStallId);
+        if (st && st.raidCarId === crashedCar.id) {
+          st.raidDispatched = false;
+          st.raidCarId = undefined;
+        }
+      }
       for (const b of this.buildingsList) {
         if (b.id === crashedCar.originBuildingId) {
           b.activeTripsOut = Math.max(0, b.activeTripsOut - 1);
@@ -7471,7 +8405,7 @@ export class CitySimulation {
     this.cars.splice(firstIdx, 1);
     this.cars.splice(secondIdx, 1);
 
-    const serious = Math.random() < 0.25;
+    const serious = isEmergencyCollision ? Math.random() < 0.35 : Math.random() < 0.25;
     const incident: CrashIncident = {
       id: `crash_${this.crashIdCounter++}`,
       x: tx,
@@ -7496,6 +8430,20 @@ export class CitySimulation {
 
     this.crashes.push(incident);
     this.totalCrashes += 1;
+    if (isEmergencyCollision) {
+      this.floatingLabels.push({
+        wx,
+        wy: wy - 12,
+        text: 'EMERGENCY CRASH!',
+        color: '#FEF2F2',
+        bgColor: '#B91C1C',
+        age: 0,
+        maxAge: 2.0,
+      });
+      if (serious) {
+        this.logDailyNews(`WHOOPS! Two drivers in ${this.describeArea(tx, ty)} tried squeezing into the exact same spot—miraculously nobody spilled their coffee!`);
+      }
+    }
     if (playAudio) soundEngine.playCarCrash();
 
     // Impact sparks & smoke burst
@@ -7565,28 +8513,28 @@ export class CitySimulation {
       const startRoad = findAdjacentRoadTile(this.tiles, st.x, st.y);
       if (!startRoad) continue;
       const path = findRoadPath(this.tiles, startRoad, destRoad, 0.8);
-      if (!path || path.length < 2) continue;
+      if (!path || path.length < 1) continue;
 
-      const p0 = path[0];
-      const p1 = path[1];
+      const fullPath: GridPoint[] = [{ x: st.x, y: st.y }, ...path];
+      const p0 = fullPath[0];
+      const p1 = fullPath[1];
       const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
-      const rightX = -Math.sin(angle) * LANE_OFFSET;
-      const rightY = Math.cos(angle) * LANE_OFFSET;
 
       const carId = `car_${this.carIdCounter++}`;
       const responder: Car = {
         id: carId,
         type: vehicleType,
         color: vehicleType === 'ambulance' ? '#F8FAFC' : '#1E3A8A',
-        wx: (p0.x + 0.5) * TILE_SIZE + rightX,
-        wy: (p0.y + 0.5) * TILE_SIZE + rightY,
+        wx: (p0.x + 0.5) * TILE_SIZE,
+        wy: (p0.y + 0.5) * TILE_SIZE,
         angle,
         speed: 45,
         maxSpeed: 94,
-        path,
+        path: fullPath,
         pathIndex: 1,
         originBuildingId: st.id,
         destBuildingId: st.id,
+        returnStationId: st.id,
         originCategory: category,
         destCategory: category,
         waitSeconds: 0,
@@ -7631,9 +8579,11 @@ export class CitySimulation {
       const idx = this.cars.findIndex((c) => c.id === carId);
       if (idx !== -1) {
         const car = this.cars[idx];
-        car.parkedAtCrash = false;
-        this.finishTrip(car);
-        this.cars.splice(idx, 1);
+        if (!this.sendVehicleBackToStation(car, car.returnStationId, false)) {
+          car.parkedAtCrash = false;
+          this.finishTrip(car);
+          this.cars.splice(idx, 1);
+        }
       }
     }
     crash.responderCarIds = [];
@@ -7968,7 +8918,6 @@ export class CitySimulation {
       minutesOfDay: this.minutesOfDay,
       formattedTime,
       timePhase: this.getTimePhase(),
-      rushPeriodLabel: this.getRushPeriodLabel(),
       population,
       buildingsCount: this.buildingsList.length,
       roadTilesCount: this.roadTilesCount,
@@ -8011,6 +8960,10 @@ export class CitySimulation {
       electionActive: this.electionActive,
       electionRemaining: Math.ceil(this.electionRemaining),
       brokenBridgesCount: this.brokenBridges.filter((b) => b.status === 'broken').length,
+      oceanTrashCount: this.trashItems.filter((t) => t.inWater).length,
+      unreadNewsCount: this.unreadNewsCount,
+      dailyNewsHeadline: this.newspapers[0]?.headline || `Morning Edition: ${this.mapName}`,
+      activeEscapees: this.people.filter((p) => p.role === 'escapee').length,
       season: this.season,
       weather: this.weather,
       chaosCooldowns: {
@@ -8022,5 +8975,696 @@ export class CitySimulation {
         nuke: Math.ceil(this.chaosCooldowns.nuke),
       },
     };
+  }
+
+  private describeArea(tx: number, ty: number): string {
+    let bestNeighbourhood: Neighbourhood | null = null;
+    let bestDist = Infinity;
+    for (const n of this.neighbourhoods) {
+      const d = Math.hypot(n.centerX - tx, n.centerY - ty);
+      if (d < bestDist) {
+        bestDist = d;
+        bestNeighbourhood = n;
+      }
+    }
+    if (bestNeighbourhood && bestDist <= 8) {
+      return bestNeighbourhood.name;
+    }
+    if (Math.abs(tx - GRID_COLS / 2) <= 6 && Math.abs(ty - GRID_ROWS / 2) <= 5) {
+      return 'Downtown';
+    }
+    const ns = ty < GRID_ROWS * 0.36 ? 'North' : ty > GRID_ROWS * 0.64 ? 'South' : '';
+    const ew = tx < GRID_COLS * 0.36 ? 'West' : tx > GRID_COLS * 0.64 ? 'East' : '';
+    if (ns && ew) return `${ns}-${ew} District`;
+    if (ns) return `${ns}side`;
+    if (ew) return `${ew}side`;
+    return 'Midtown';
+  }
+
+  public markNewsRead() {
+    this.unreadNewsCount = 0;
+  }
+
+  private logDailyNews(line: string) {
+    if (!this.dailyHighlights.includes(line)) {
+      this.dailyHighlights.push(line);
+      if (this.dailyHighlights.length > 6) this.dailyHighlights.shift();
+    }
+  }
+
+  private publishMorningNewspaper(playAudio: boolean, dispatchPaperboy = true, isInaugural = false) {
+    this.lastMorningPaperDay = this.dayCount;
+    const stats = this.getStats();
+    const rawHighlights = [...this.dailyHighlights];
+    this.dailyHighlights = [];
+
+    const citizenNames = [
+      'Clara', 'Mateo', 'Priya', 'Kenji', 'Sofia', 'Amir', 'Tessa', 'Noah',
+      'Elena', 'Omar', 'Chloe', 'Devon', 'Hana', 'Marco', 'Zuri', 'Victor',
+      'Ruby', 'Jasper', 'Linus', 'Nadia', 'Felix', 'Maya', 'Tariq', 'Piper',
+    ];
+    const famousFigures = [
+      'Legendary Pie Chef Barnaby Crustwell',
+      'Acclaimed Crosswalk Conductor Pip Sterling',
+      'Retro Stunt Cyclist Evelina Sparks',
+      'World-Famous Honeybee Whisperer Agatha Honeycutt',
+      'Accordion Virtuoso Maestro Figaro',
+      'Pioneer River Kayaker Captain Cornelius Drift',
+    ];
+    const pickName = (offset: number) =>
+      citizenNames[(this.dayCount * 3 + offset + Math.floor(stats.population)) % citizenNames.length];
+    const nameA = pickName(0);
+    const nameB = pickName(7);
+    const nameC = pickName(13);
+    const famName = famousFigures[(this.dayCount + stats.activeStalls) % famousFigures.length];
+
+    const weirdHeadlines: string[] = [
+      `WOW: ${nameA} Just Did 100 Backflips Outside the Cafe Without Spilling Coffee!`,
+      `STRANGE HOLIDAY: Citizens Suddenly Proclaimed Today "National High-Five-a-Mailbox Day"!`,
+      `MAYOR'S WEIRD TAKE: Mayor Says Traffic Cones Deserve Tiny Birthday Hats & Disco Lights!`,
+      `IN MEMORIAM: ${famName} Passed Away—Whole Town Left Cinnamon Rolls Outside!`,
+      `WILD BUZZ: ${nameB} Sprinted Past a Bus Just to Beat the Morning Bakery Line!`,
+      `STRANGE HOLIDAY: Folks Declared "Walk-Five-Steps-Backwards Day" Near the Waterfront!`,
+      `MAYOR'S OPINION: Mayor Demands Seagulls Pay Bridge Tolls in Shiny Pebbles!`,
+      `MYSTERY: 47 Rubber Ducks Appeared by the Pier and ${nameC} Refuses to Explain`,
+      `EXCITING: Chef ${nameB} Unveiled "Invisible Soup"—Critics Praise Its Crispy Air`,
+      `STRANGE HOLIDAY: Citizens Celebrate "Inside-Out Coat & Duck-Cheering Day" Today!`,
+      `MAYOR'S RANT: Mayor Claims Snowmen Look "Too Judgmental" After Sunset`,
+      `LOCAL LEGEND: Pet Cat "Count Whiskers" Won 19 Best-Citizen Votes Somehow`,
+    ];
+
+    const quirkyStories: string[] = [
+      `Witnesses say ${nameA} finished flip #100, checked the clock, and casually ordered two cinnamon rolls.`,
+      `Stranger still: half of ${this.mapName} observed spontaneous "High-Five-a-Mailbox Day" by cheering at every postbox before lunch.`,
+      `Hot take from City Hall: the Mayor told reporters that crosswalks would work 200% faster if painted in sparkly neon polka dots.`,
+      `Mourners gathered quietly to remember ${famName}, whose legendary backyard tales and generous tarts touched every block.`,
+      `Local opinion poll reveals 94% of citizens think ${this.mapName} needs more snack breaks and 100% believe traffic lights hold personal grudges.`,
+      `Three skaters swore ${nameB} launched three feet over a park bench; ${nameC} insists it was "pure caffeinated physics."`,
+      `The Mayor raised eyebrows on morning radio by proposing Friday curfews for noisy geese—and free umbrellas for everyone else.`,
+      `Mystery deepens as every garden flamingo in Midtown rotated overnight to stare straight at the closest rowboat dock.`,
+      `A fisher claims a giant carp winked, stole ${nameA}'s sandwich, and kayaked away (okay, splashed away). Zero regrets reported.`,
+      `Citizens woke up to "Walk-Five-Steps-Backwards Day" chalk signs downtown—only two shoppers tripped into flower pots.`,
+    ];
+
+    const seed = (this.dayCount * 7 + stats.population * 3 + stats.activeCars) % weirdHeadlines.length;
+    const storyA = quirkyStories[(this.dayCount * 3 + 1) % quirkyStories.length];
+    const storyB = quirkyStories[(this.dayCount * 5 + 2) % quirkyStories.length];
+
+    let headline = weirdHeadlines[seed];
+    if (isInaugural) {
+      headline = `SCOOP: ${nameA} Did 100 Backflips to Kick Off Day One in ${this.mapName}!`;
+    } else if (this.crises.warActive) {
+      headline = `WAR BULLETIN: Foreign Forces & Tanks Invading While Folks Sprint for Cover!`;
+    } else if (this.electionActive) {
+      headline = `ELECTION FEVER: Voters Debate Who Promises Shorter Commutes & Better Snacks!`;
+    } else if (this.crises.virusActive) {
+      headline = `ACHOO! Town Docs Prescribe Extra Soup & Fewer Dubious Street Fish Today`;
+    } else if (this.crises.pollutionActive || stats.oceanTrashCount >= 8) {
+      headline = `YUCK! Even the Seagulls Are Complaining About Ocean Trash—Cleanup Time!`;
+    } else if (rawHighlights.length > 0) {
+      const first = rawHighlights[0];
+      if (first.includes('Mayor fell') || first.includes('killed the Mayor')) {
+        headline = `SHOCKING DAY: ${this.mapName} Honors Fallen Mayor & Demands Emergency Vote!`;
+      } else if (first.includes('FOREIGN INVASION') || first.includes('WAR WRECKAGE')) {
+        headline = `UNDER ATTACK: Foreign Tanks Shelled ${this.mapName} During Wild Border Raid!`;
+      } else if (first.includes('TRIBUTE TO A LEGEND')) {
+        headline = `FAREWELL: ${this.mapName} Mourns Beloved Town Legend With Flowers & Pastries!`;
+      } else if (first.includes('elected')) headline = `ELECTION DRAMA: New Mayor In, Strange City Hall Opinions Already Flowing!`;
+      else if (first.includes('busted')) headline = `BUSTED! Shady Outskirts "Mystery Juice" Stall Raided Before Lunch`;
+      else if (first.includes('escaped') || first.includes('Breakout') || first.includes('BREAKOUT')) {
+        headline = `WILD CHASE: Jailbreak Suspect Caught Trying to Blend In With Park Bushes!`;
+      } else if (first.includes('burglar') || first.includes('bush')) headline = `OOPS! Burglar Outsmarted by Police & One Extremely Nosey Neighbor`;
+      else if (first.includes('randomly built')) headline = `SURPRISE! Neighbors Built a Whole New Hangout Without Telling Anyone`;
+      else if (first.includes('FIELD TRIP')) headline = `FIELD TRIP CHAOS: Kids Cheered Louder Than Fire Sirens All Afternoon!`;
+      else if (first.includes('crater')) headline = `KABOOM?! ${nameB} Calls Giant Road Crater "A Character-Building Pothole"`;
+      else if (first.includes('WHOOPS!')) headline = `FENDER BENDER DRAMA: Drivers Argued Over Who Spilled Zero Coffee!`;
+    } else if (stats.trafficFlowPercent < 55) {
+      headline = `COMMUTER RANT: Stuck in Traffic Long Enough to Finish Two Podcasts Again!`;
+    } else if (this.season === 'Winter' && (this.weather === 'Snow' || this.snowmen.length > 0)) {
+      headline = `SNOW SHOWDOWN: Neighborhood Kids Crushed ${nameC}'s Team 12-0 in Snowball Battle!`;
+    }
+
+    const vibeTake =
+      stats.citizenHappiness >= 75
+        ? `Personal opinion: vibes in ${this.mapName} are immaculate right now (${stats.citizenHappiness}% mood!)—even the honking sounds cheerful.`
+        : stats.citizenHappiness >= 50
+        ? `Local chatter says ${this.mapName} feels delightfully unpredictable today (${stats.citizenHappiness}% mood, ${stats.trafficFlowPercent}% road flow).`
+        : `Reader hotline is buzzing with spicy takes today (${stats.citizenHappiness}% mood)—folks definitely have opinions for City Hall!`;
+
+    const weatherQuip =
+      this.weather === 'Rain' || this.weather === 'Storm'
+        ? `${this.season} rain has citizens glaring out their windows waiting to sprint outside again.`
+        : this.weather === 'Snow'
+        ? `Snowy ${this.season} air has mittens, snowmen, and questionable sled stunts everywhere.`
+        : `Crisp ${this.season} ${this.weather.toLowerCase()} skies have ${stats.population} townsfolk buzzing across ${stats.buildingsCount} spots.`;
+
+    const summary = isInaugural
+      ? `What a morning! Right as the sun came up over ${this.mapName}, local acrobat ${nameA} pulled off 100 backflips outside the corner cafe while ${stats.population} neighbors cheered. ${weatherQuip} ${vibeTake}`
+      : rawHighlights.length > 0
+      ? `${rawHighlights[0]} Meanwhile, ${storyA} ${vibeTake}`
+      : `${storyA} ${weatherQuip} ${vibeTake}`;
+
+    const highlights: string[] = [];
+    if (isInaugural) {
+      highlights.push(
+        `OPINION: ${this.mapName} looks way better at sunrise than yesterday's traffic map promised—10/10 morning energy.`,
+        storyA,
+        `EXCITING TIP: Seasons shift every 10 days, water sports open on shorelines, and tomorrow's paper could bring a weird holiday!`
+      );
+    } else {
+      for (const item of rawHighlights) {
+        if (!highlights.includes(item) && highlights.length < 3) {
+          highlights.push(item);
+        }
+      }
+      if (!highlights.includes(storyA) && highlights.length < 4) highlights.push(storyA);
+      if (!highlights.includes(storyB) && highlights.length < 4) highlights.push(storyB);
+      if (highlights.length < 3) {
+        highlights.push(
+          stats.activeStalls > 0
+            ? `SHORE & STREET BUZZ: ${stats.activeStalls} pop-up & waterfront stands are open—everyone argues whose snacks or boats are fastest.`
+            : `STREET BUZZ: ${stats.trafficFlowPercent}% road flow today—drivers are weirdly polite (so far).`
+        );
+      }
+    }
+
+    const edition: NewspaperEdition = {
+      id: `news_${this.newsIdCounter++}`,
+      day: this.dayCount,
+      season: this.season,
+      weather: this.weather,
+      headline,
+      summary,
+      highlights,
+      publishedAtTime: isInaugural ? '07:05' : '06:30',
+    };
+
+    this.newspapers.unshift(edition);
+    if (this.newspapers.length > 12) this.newspapers.pop();
+    if (!isInaugural) {
+      this.unreadNewsCount = Math.min(9, this.unreadNewsCount + 1);
+    }
+
+    if (dispatchPaperboy) {
+      const origin =
+        this.buildingsList.find((b) => b.category === 'city_hall') ||
+        this.buildingsList.find((b) => b.category === 'commercial') ||
+        this.buildingsList[0];
+      const homes = this.buildingsList
+        .filter((b) => b.category === 'residential')
+        .sort(() => Math.random() - 0.5)
+        .slice(0, 4);
+
+      if (origin && homes.length > 0) {
+        const first = homes[0];
+        const path = findPedestrianPath(this.tiles, { x: origin.x, y: origin.y }, { x: first.x, y: first.y });
+        if (path) {
+          this.people.push({
+            id: `ppl_${this.personIdCounter++}`,
+            role: 'paperboy',
+            wx: (origin.x + 0.5) * TILE_SIZE,
+            wy: (origin.y + 0.78) * TILE_SIZE,
+            targetWx: (first.x + 0.5) * TILE_SIZE,
+            targetWy: (first.y + 0.78) * TILE_SIZE,
+            speed: 44,
+            shirtColor: '#F59E0B',
+            hatColor: '#78350F',
+            animPhase: 0,
+            state: 'delivering',
+            homeBuildingId: origin.id,
+            destBuildingId: first.id,
+            deliveryQueueIds: homes.slice(1).map((h) => h.id),
+            targetTileX: first.x,
+            targetTileY: first.y,
+            pedestrianPath: path,
+            pedestrianPathIndex: path.length > 1 ? 1 : 0,
+            holdTimer: 0,
+          });
+        }
+      }
+    }
+    if (playAudio) soundEngine.playMarketSale();
+  }
+
+  private updateNewspaperDelivery(simDt: number, realDt: number) {
+    for (let i = this.porchPapers.length - 1; i >= 0; i--) {
+      this.porchPapers[i].age += simDt;
+      if (this.porchPapers[i].age >= 50) {
+        this.porchPapers.splice(i, 1);
+      }
+    }
+
+    for (let i = this.people.length - 1; i >= 0; i--) {
+      const p = this.people[i];
+      if (p.role !== 'paperboy') continue;
+
+      if (p.state === 'delivering') {
+        const res = this.stepPersonAlongPath(p, realDt, 11);
+        if (res === 'arrived') {
+          if (p.destBuildingId) {
+            const house = this.buildingsList.find((b) => b.id === p.destBuildingId);
+            if (house) {
+              this.porchPapers.push({
+                id: `pp_${this.trashIdCounter++}`,
+                wx: (house.x + 0.66) * TILE_SIZE,
+                wy: (house.y + 0.82) * TILE_SIZE,
+                age: 0,
+              });
+              this.floatingLabels.push({
+                wx: (house.x + 0.5) * TILE_SIZE,
+                wy: (house.y + 0.28) * TILE_SIZE,
+                text: 'Morning Paper!',
+                color: '#0F172A',
+                bgColor: '#FEF3C7',
+                age: 0,
+                maxAge: 1.4,
+              });
+            }
+          }
+          // Continue to next house in delivery queue
+          let routedNext = false;
+          while (p.deliveryQueueIds && p.deliveryQueueIds.length > 0 && !routedNext) {
+            const nextId = p.deliveryQueueIds.shift()!;
+            const nextHouse = this.buildingsList.find((b) => b.id === nextId);
+            if (nextHouse && this.assignPedestrianRoute(p, nextHouse.x, nextHouse.y, (nextHouse.x + 0.5) * TILE_SIZE, (nextHouse.y + 0.78) * TILE_SIZE)) {
+              p.destBuildingId = nextHouse.id;
+              routedNext = true;
+            }
+          }
+          if (!routedNext && !this.assignReturnRoute(p)) {
+            this.people.splice(i, 1);
+          }
+        } else if (res === 'blocked') {
+          this.people.splice(i, 1);
+        }
+      } else {
+        p.holdTimer -= realDt;
+        const res = this.stepPersonAlongPath(p, realDt, 10);
+        if (res !== 'moving' || p.holdTimer <= 0) {
+          this.people.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  private updateTrashAndLittering(simDt: number, realDt: number, playAudio: boolean) {
+    // 1. Decay old land trash slowly (ocean trash persists until cleaners pick it up or max age)
+    for (let i = this.trashItems.length - 1; i >= 0; i--) {
+      this.trashItems[i].age += simDt;
+      if (this.trashItems[i].age >= 260) {
+        this.trashItems.splice(i, 1);
+      }
+    }
+
+    if (this.trashItems.length >= 24) return;
+    this.litterCheckAccumulator += simDt;
+    if (this.litterCheckAccumulator < 12) return;
+    this.litterCheckAccumulator = 0;
+
+    // Pick an outdoor civilian walker near grass or shoreline water and drop visible trash
+    const candidates = this.people.filter(
+      (p) =>
+        (p.role === 'pedestrian' || p.role === 'shopper' || p.role === 'hobbyist' || p.role === 'fisher') &&
+        p.state !== 'returning'
+    );
+    if (candidates.length === 0 || Math.random() > 0.62) return;
+
+    const litterer = candidates[Math.floor(Math.random() * candidates.length)];
+    const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(litterer.wx / TILE_SIZE)));
+    const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(litterer.wy / TILE_SIZE)));
+
+    const dirs = [
+      { dx: 1, dy: 0 },
+      { dx: -1, dy: 0 },
+      { dx: 0, dy: 1 },
+      { dx: 0, dy: -1 },
+    ];
+    let waterTile: MapTile | null = null;
+    for (const d of dirs) {
+      const nt = this.getTile(tx + d.dx, ty + d.dy);
+      if (nt && nt.terrain === 'water' && !nt.hasRoad && !nt.hasFootbridge) {
+        waterTile = nt;
+        break;
+      }
+    }
+
+    const kinds: TrashItem['kind'][] = ['bottle', 'can', 'bag', 'wrapper'];
+    const kind = kinds[Math.floor(Math.random() * kinds.length)];
+
+    if (waterTile) {
+      this.trashItems.push({
+        id: `tr_${this.trashIdCounter++}`,
+        x: waterTile.x,
+        y: waterTile.y,
+        wx: (waterTile.x + 0.35 + Math.random() * 0.3) * TILE_SIZE,
+        wy: (waterTile.y + 0.35 + Math.random() * 0.3) * TILE_SIZE,
+        inWater: true,
+        kind,
+        age: 0,
+      });
+      this.floatingLabels.push({
+        wx: litterer.wx,
+        wy: litterer.wy - 10,
+        text: 'Trash in Ocean!',
+        color: '#FEF2F2',
+        bgColor: '#0369A1',
+        age: 0,
+        maxAge: 1.5,
+      });
+    } else {
+      const curTile = this.getTile(tx, ty);
+      if (curTile && curTile.terrain === 'grass' && !curTile.building) {
+        this.trashItems.push({
+          id: `tr_${this.trashIdCounter++}`,
+          x: curTile.x,
+          y: curTile.y,
+          wx: litterer.wx + (Math.random() - 0.5) * 6,
+          wy: litterer.wy + 2,
+          inWater: false,
+          kind,
+          age: 0,
+        });
+        this.floatingLabels.push({
+          wx: litterer.wx,
+          wy: litterer.wy - 10,
+          text: 'Littered!',
+          color: '#FEF3C7',
+          bgColor: '#78350F',
+          age: 0,
+          maxAge: 1.3,
+        });
+      }
+    }
+    void realDt;
+    void playAudio;
+  }
+
+  private updateCommunityActivities(simDt: number, realDt: number, playAudio: boolean) {
+    const curfew = this.isOutdoorCurfew();
+    const isWarPanic = this.crises.warActive || this.people.some((o) => o.role === 'invader');
+    const hour = this.minutesOfDay / 60;
+    const isSchoolHours = hour >= 8 && hour < 16;
+
+    // 1. Step & Spawn Coastal Businesses & Water Sports (Kayaking, Rowing Boats, Swimming) when water is unfrozen
+    const activeWaterUsers = this.people.filter((p) => p.role === 'kayaker').length;
+    if (!curfew && !isWarPanic && this.season !== 'Winter' && activeWaterUsers < 5) {
+      this.kayakerAccumulator += simDt;
+      if (this.kayakerAccumulator >= 10) {
+        this.kayakerAccumulator = 0;
+        const shore = this.getWalkableShoreTiles();
+        const origins = this.buildingsList.filter(
+          (b) => b.category === 'park' || b.category === 'residential' || b.category === 'commercial'
+        );
+        if (shore.length > 0 && origins.length > 0) {
+          const spot = shore[Math.floor(Math.random() * shore.length)];
+          const waterX = spot.tile.x + spot.waterDx;
+          const waterY = spot.tile.y + spot.waterDy;
+          const orig = origins[Math.floor(Math.random() * origins.length)];
+          const path = findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: spot.tile.x, y: spot.tile.y });
+          if (path) {
+            const activities: Array<'kayak' | 'rowing' | 'swim'> = ['kayak', 'rowing', 'swim'];
+            const existingActivities = new Set(
+              this.people.filter((p) => p.role === 'kayaker').map((p) => p.waterActivity || 'kayak')
+            );
+            const activity =
+              activities.find((a) => !existingActivities.has(a)) ||
+              activities[Math.floor(Math.random() * activities.length)];
+            const stallGoods: StallGoodsType =
+              activity === 'rowing' ? 'rowboat' : activity === 'swim' ? 'swim' : 'kayak';
+            const awningColor =
+              activity === 'rowing' ? '#B45309' : activity === 'swim' ? '#0284C7' : '#0891B2';
+
+            if (
+              spot.tile.terrain === 'grass' &&
+              !spot.tile.building &&
+              !this.marketStalls.some((s) => s.x === spot.tile.x && s.y === spot.tile.y) &&
+              this.marketStalls.length < 7 &&
+              !this.marketStalls.some((s) => s.goods === stallGoods)
+            ) {
+              this.marketStalls.push({
+                id: `stall_${this.stallIdCounter++}`,
+                x: spot.tile.x,
+                y: spot.tile.y,
+                wx: (spot.tile.x + 0.5) * TILE_SIZE,
+                wy: (spot.tile.y + 0.54) * TILE_SIZE,
+                goods: stallGoods,
+                awningColor,
+                vendorPersonId: orig.id,
+                stock: 6,
+                salesCount: 0,
+                age: 0,
+                maxAge: 85,
+              });
+            }
+            this.people.push({
+              id: `ppl_${this.personIdCounter++}`,
+              role: 'kayaker',
+              waterActivity: activity,
+              waterTileX: waterX,
+              waterTileY: waterY,
+              wx: (orig.x + 0.5) * TILE_SIZE,
+              wy: (orig.y + 0.78) * TILE_SIZE,
+              targetWx: (spot.tile.x + 0.5) * TILE_SIZE,
+              targetWy: (spot.tile.y + 0.5) * TILE_SIZE,
+              speed: 28,
+              shirtColor:
+                activity === 'swim'
+                  ? ['#F43F5E', '#0EA5E9', '#10B981'][Math.floor(Math.random() * 3)]
+                  : activity === 'rowing'
+                  ? ['#D97706', '#2563EB', '#0F766E'][Math.floor(Math.random() * 3)]
+                  : ['#06B6D4', '#F59E0B', '#EC4899'][Math.floor(Math.random() * 3)],
+              animPhase: 0,
+              state: 'walking',
+              homeBuildingId: orig.id,
+              targetTileX: spot.tile.x,
+              targetTileY: spot.tile.y,
+              pedestrianPath: path,
+              pedestrianPathIndex: path.length > 1 ? 1 : 0,
+              holdTimer: 18 + Math.random() * 9,
+            });
+          }
+        }
+      }
+    }
+
+    // 2. Spawn School Field Trips ONLY during School Hours (8:00 AM - 4:00 PM)
+    const activeStudents = this.people.filter((p) => p.role === 'student').length;
+    const schools = this.buildingsList.filter((b) => b.category === 'school');
+    const tripVenues = this.buildingsList.filter(
+      (b) =>
+        b.category === 'park' ||
+        b.category === 'crops' ||
+        b.category === 'landmark' ||
+        b.category === 'city_hall'
+    );
+    if (!curfew && !isWarPanic && isSchoolHours && schools.length > 0 && tripVenues.length > 0 && activeStudents === 0) {
+      this.fieldTripAccumulator += simDt;
+      if (this.fieldTripAccumulator >= 55) {
+        this.fieldTripAccumulator = 0;
+        const sch = schools[Math.floor(Math.random() * schools.length)];
+        const dest = tripVenues[Math.floor(Math.random() * tripVenues.length)];
+        const path = findPedestrianPath(this.tiles, { x: sch.x, y: sch.y }, { x: dest.x, y: dest.y });
+        if (path) {
+          this.logDailyNews(`FIELD TRIP CHAOS: Kids from ${sch.name} cheered louder than fire sirens visiting ${dest.name} during school hours!`);
+          for (let k = 0; k < 4; k++) {
+            this.people.push({
+              id: `ppl_${this.personIdCounter++}`,
+              role: 'student',
+              wx: (sch.x + 0.5) * TILE_SIZE + (k - 1.5) * 3,
+              wy: (sch.y + 0.78) * TILE_SIZE,
+              targetWx: (dest.x + 0.5) * TILE_SIZE + (k - 1.5) * 4,
+              targetWy: (dest.y + 0.8) * TILE_SIZE,
+              speed: 24,
+              shirtColor: k === 0 ? '#0F766E' : '#FACC15',
+              hatColor: k === 0 ? undefined : '#0284C7',
+              animPhase: k * 0.7,
+              state: 'walking',
+              homeBuildingId: sch.id,
+              destBuildingId: dest.id,
+              targetTileX: dest.x,
+              targetTileY: dest.y,
+              pedestrianPath: [...path],
+              pedestrianPathIndex: path.length > 1 ? 1 : 0,
+              holdTimer: 10,
+            });
+          }
+        }
+      }
+    }
+
+    // 3. Occasional Citizen Self-Building on empty grass near roads
+    const activeBuilders = this.people.filter((p) => p.role === 'builder').length;
+    if (!curfew && !isWarPanic && activeBuilders === 0 && this.buildingsList.length >= 4 && this.buildingsList.length < 48) {
+      this.citizenBuildAccumulator += simDt;
+      if (this.citizenBuildAccumulator >= 95) {
+        this.citizenBuildAccumulator = 0;
+        if (Math.random() < 0.42) {
+          const openLots = this.tiles.filter(
+            (t) =>
+              t.terrain === 'grass' &&
+              !t.hasRoad &&
+              !t.building &&
+              !this.marketStalls.some((s) => s.x === t.x && s.y === t.y) &&
+              getRoadNeighbors(this.tiles, t.x, t.y).length > 0
+          );
+          const homes = this.buildingsList.filter((b) => b.category === 'residential' || b.category === 'workplace');
+          if (openLots.length > 0 && homes.length > 0) {
+            const lot = openLots[Math.floor(Math.random() * openLots.length)];
+            const orig = homes[Math.floor(Math.random() * homes.length)];
+            const path = findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: lot.x, y: lot.y });
+            if (path) {
+              this.people.push({
+                id: `ppl_${this.personIdCounter++}`,
+                role: 'builder',
+                wx: (orig.x + 0.5) * TILE_SIZE,
+                wy: (orig.y + 0.78) * TILE_SIZE,
+                targetWx: (lot.x + 0.5) * TILE_SIZE,
+                targetWy: (lot.y + 0.65) * TILE_SIZE,
+                speed: 27,
+                shirtColor: '#F59E0B',
+                hatColor: '#FDE047',
+                animPhase: 0,
+                state: 'walking',
+                homeBuildingId: orig.id,
+                targetTileX: lot.x,
+                targetTileY: lot.y,
+                pedestrianPath: path,
+                pedestrianPathIndex: path.length > 1 ? 1 : 0,
+                holdTimer: 3.5,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // 4. Step Water Sports (Kayakers, Rowers, Swimmers), Field Trip Students, and Citizen Builders
+    for (let i = this.people.length - 1; i >= 0; i--) {
+      const p = this.people[i];
+
+      if (p.role === 'kayaker') {
+        if ((curfew || isWarPanic || this.season === 'Winter') && p.state !== 'returning') {
+          p.isPanicking = isWarPanic;
+          p.speed = isWarPanic ? 48 : 34;
+          if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+          continue;
+        }
+        if (p.state === 'walking') {
+          const res = this.stepPersonAlongPath(p, realDt, 7.5);
+          if (res === 'arrived') {
+            p.state = 'kayaking';
+            this.economyScore = Math.min(100, this.economyScore + 0.25);
+          } else if (res === 'blocked') {
+            this.people.splice(i, 1);
+          }
+        } else if (p.state === 'kayaking') {
+          const animRate = p.waterActivity === 'swim' ? 6.2 : p.waterActivity === 'rowing' ? 3.8 : 4.6;
+          p.animPhase += realDt * animRate;
+          p.holdTimer -= realDt;
+          const wtx = p.waterTileX ?? p.targetTileX;
+          const wty = p.waterTileY ?? p.targetTileY;
+          if (wtx !== undefined && wty !== undefined) {
+            const cx = (wtx + 0.5) * TILE_SIZE;
+            const cy = (wty + 0.5) * TILE_SIZE;
+            const rx = p.waterActivity === 'swim' ? 7 : 10;
+            const ry = p.waterActivity === 'swim' ? 4.5 : 5.5;
+            p.wx = cx + Math.sin(p.animPhase * 0.45) * rx;
+            p.wy = cy + Math.cos(p.animPhase * 0.9) * ry;
+          }
+          if (p.holdTimer <= 0) {
+            if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+          }
+        } else {
+          p.holdTimer -= realDt;
+          const res = this.stepPersonAlongPath(p, realDt, 8);
+          if (res !== 'moving' || p.holdTimer <= 0) this.people.splice(i, 1);
+        }
+        continue;
+      }
+
+      if (p.role === 'student') {
+        if ((curfew || isWarPanic || !isSchoolHours) && p.state !== 'returning') {
+          p.isPanicking = isWarPanic;
+          p.speed = isWarPanic ? 46 : 36;
+          if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+          continue;
+        }
+        if (p.state === 'walking') {
+          const res = this.stepPersonAlongPath(p, realDt, 7.5);
+          if (res === 'arrived') {
+            p.state = 'field_trip';
+            p.holdTimer = 8.5 + Math.random() * 2;
+          } else if (res === 'blocked') {
+            this.people.splice(i, 1);
+          }
+        } else if (p.state === 'field_trip') {
+          p.animPhase += realDt * 4.5;
+          p.holdTimer -= realDt;
+          if (p.holdTimer <= 0) {
+            if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+          }
+        } else {
+          p.holdTimer -= realDt;
+          const res = this.stepPersonAlongPath(p, realDt, 8);
+          if (res !== 'moving' || p.holdTimer <= 0) this.people.splice(i, 1);
+        }
+        continue;
+      }
+
+      if (p.role === 'builder') {
+        if (p.state === 'walking') {
+          const res = this.stepPersonAlongPath(p, realDt, 8);
+          if (res === 'arrived') {
+            p.state = 'building';
+            p.holdTimer = 3.2;
+          } else if (res === 'blocked') {
+            this.people.splice(i, 1);
+          }
+        } else if (p.state === 'building') {
+          p.animPhase += realDt * 9;
+          p.holdTimer -= realDt;
+          if (Math.random() < realDt * 3) {
+            this.woodChips.push({
+              wx: p.wx + (Math.random() - 0.5) * 6,
+              wy: p.wy - 2,
+              vx: (Math.random() - 0.5) * 24,
+              vy: -12 - Math.random() * 12,
+              age: 0,
+              maxAge: 0.35,
+              color: '#FDE047',
+            });
+          }
+          if (p.holdTimer <= 0) {
+            if (p.targetTileX !== undefined && p.targetTileY !== undefined) {
+              const bpIds = ['cottage', 'park_bench', 'cafe', 'crops'];
+              const pickId = bpIds[Math.floor(Math.random() * bpIds.length)];
+              const bp = this.getAllBlueprints().find((b) => b.id === pickId);
+              const targetTile = this.getTile(p.targetTileX, p.targetTileY);
+              if (bp && targetTile && targetTile.terrain === 'grass' && !targetTile.hasRoad && !targetTile.building) {
+                const placed = this.placeBuilding(p.targetTileX, p.targetTileY, bp);
+                if (placed) {
+                  this.floatingLabels.push({
+                    wx: (placed.x + 0.5) * TILE_SIZE,
+                    wy: (placed.y + 0.25) * TILE_SIZE,
+                    text: `+Built ${placed.name}!`,
+                    color: '#FEF9C3',
+                    bgColor: '#0F766E',
+                    age: 0,
+                    maxAge: 1.9,
+                  });
+                  this.logDailyNews(`WAIT WHAT?! Neighbors randomly built a brand-new ${placed.name} overnight without telling anyone—and honestly, it rocks!`);
+                  if (playAudio) soundEngine.playPlantTree();
+                }
+              }
+            }
+            if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+          }
+        } else {
+          p.holdTimer -= realDt;
+          const res = this.stepPersonAlongPath(p, realDt, 8);
+          if (res !== 'moving' || p.holdTimer <= 0) this.people.splice(i, 1);
+        }
+      }
+    }
   }
 }

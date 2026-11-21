@@ -3,6 +3,7 @@ import { HudOverlay } from './components/HudOverlay';
 import { IconPainterModal } from './components/IconPainterModal';
 import { InspectorPanel } from './components/InspectorPanel';
 import { MapManagerModal } from './components/MapManagerModal';
+import { NewspaperModal } from './components/NewspaperModal';
 import { PauseModal } from './components/PauseModal';
 import { TitleScreen } from './components/TitleScreen';
 import { DEFAULT_BLUEPRINTS, PRESET_MAPS } from './data/defaultBlueprints';
@@ -74,9 +75,12 @@ export default function App() {
   );
   const [activeBlueprintId, setActiveBlueprintId] = useState<string>(DEFAULT_BLUEPRINTS[0].id);
   const [showTrafficOverlay, setShowTrafficOverlay] = useState<boolean>(false);
-  const [showGrid, setShowGrid] = useState<boolean>(true);
+  const showGrid = true;
   const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [isMusicEnabled, setIsMusicEnabled] = useState<boolean>(false);
   const [isUiHidden, setIsUiHidden] = useState<boolean>(false);
+  const [isNewspaperOpen, setIsNewspaperOpen] = useState<boolean>(false);
+  const [justSaved, setJustSaved] = useState<boolean>(false);
 
   const [selection, setSelection] = useState<SelectionTarget | null>(null);
   const [stats, setStats] = useState<SimulationStats>(() => simRef.current!.getStats());
@@ -147,11 +151,13 @@ export default function App() {
     let rafId = 0;
     let lastTime = performance.now();
     let hudSyncAccum = 0;
+    let lastSyncedMinute = -1;
 
     const frame = (now: number) => {
-      const rawDt = (now - lastTime) / 1000;
+      const rawDt = Math.max(0, (now - lastTime) / 1000);
       lastTime = now;
-      const dt = Math.min(Math.max(rawDt, 0), 0.05);
+      const clampedDt = Math.min(rawDt, 0.25);
+      const dt = Math.min(rawDt, 0.05);
       const sim = simRef.current!;
 
       // Camera continuous WASD/Arrow pan during PLAYING
@@ -180,9 +186,13 @@ export default function App() {
         cameraRef.current.zoom = 1.05;
       }
 
-      // Step simulation unless modal-paused
+      // Step simulation at most once per frame so brief frame dips never trigger a CPU freeze spiral
       if (gameStateRef.current !== 'PAUSED') {
-        sim.step(dt, gameStateRef.current === 'PLAYING');
+        const isPlay = gameStateRef.current === 'PLAYING';
+        sim.step(dt, isPlay);
+        if (clampedDt > dt) {
+          sim.advanceClockOnly(clampedDt - dt);
+        }
       }
 
       // Render to isolated Canvas
@@ -207,10 +217,12 @@ export default function App() {
         }
       }
 
-      // Throttled HUD readout update (~5Hz)
-      hudSyncAccum += dt;
-      if (hudSyncAccum >= 0.2) {
+      // Sync HUD immediately when the game minute advances (or at 4Hz) so the clock ticks smoothly
+      hudSyncAccum += clampedDt;
+      const currMinute = Math.floor(sim.minutesOfDay);
+      if (currMinute !== lastSyncedMinute || hudSyncAccum >= 0.25) {
         hudSyncAccum = 0;
+        lastSyncedMinute = currMinute;
         setStats(sim.getStats());
       }
 
@@ -230,10 +242,11 @@ export default function App() {
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT');
       if (isTyping) return;
 
-      if (painterState?.open || isMapManagerOpen) {
+      if (painterState?.open || isMapManagerOpen || isNewspaperOpen) {
         if (e.key === 'Escape') {
           setPainterState(null);
           setIsMapManagerOpen(false);
+          setIsNewspaperOpen(false);
         }
         return;
       }
@@ -313,7 +326,7 @@ export default function App() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [painterState, isMapManagerOpen]);
+  }, [painterState, isMapManagerOpen, isNewspaperOpen]);
 
   const clampCamera = (cam: CameraState) => {
     const mapW = GRID_COLS * TILE_SIZE;
@@ -596,6 +609,36 @@ export default function App() {
     });
   };
 
+  const saveResetTimerRef = useRef<number | null>(null);
+
+  const handleSaveChanges = () => {
+    const sim = simRef.current!;
+    const currentId = sim.mapId.startsWith('preset_') ? `saved_${sim.mapId}` : sim.mapId;
+    sim.mapId = currentId;
+    const exported = sim.exportMapData(sim.mapName);
+    exported.id = currentId;
+
+    setSavedMaps((prev) => {
+      const idx = prev.findIndex((m) => m.id === currentId);
+      const next = idx >= 0 ? prev.map((m, i) => (i === idx ? exported : m)) : [exported, ...prev];
+      try {
+        localStorage.setItem(SAVED_MAPS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage quota errors
+      }
+      return next;
+    });
+
+    soundEngine.playSaveIcon();
+    setJustSaved(true);
+    if (saveResetTimerRef.current !== null) {
+      window.clearTimeout(saveResetTimerRef.current);
+    }
+    saveResetTimerRef.current = window.setTimeout(() => {
+      setJustSaved(false);
+    }, 2000);
+  };
+
   const handleDeleteSavedMap = (id: string) => {
     setSavedMaps((prev) => {
       const next = prev.filter((m) => m.id !== id);
@@ -610,9 +653,11 @@ export default function App() {
 
   const handleStartGame = () => {
     soundEngine.playUiTick();
+    simRef.current!.prepareForPlaySession();
+    simRef.current!.isRunning = true;
+    setStats(simRef.current!.getStats());
     setGameState('PLAYING');
     setToolMode('pan');
-    simRef.current!.isRunning = true;
     setIsRunning(true);
     fitCameraToViewport();
   };
@@ -747,8 +792,9 @@ export default function App() {
           blueprints={blueprints}
           activeBlueprintId={activeBlueprintId}
           showTrafficOverlay={showTrafficOverlay}
-          showGrid={showGrid}
           isMuted={isMuted}
+          isMusicEnabled={isMusicEnabled}
+          justSaved={justSaved}
           isUiHidden={isUiHidden}
           onToggleRun={() => {
             const sim = simRef.current!;
@@ -791,26 +837,6 @@ export default function App() {
             setShowTrafficOverlay((v) => !v);
             soundEngine.playUiTick();
           }}
-          onToggleGrid={() => {
-            setShowGrid((g) => !g);
-            soundEngine.playUiTick();
-          }}
-          onTriggerRush={() => {
-            simRef.current!.triggerRushBurst(16);
-            soundEngine.playUiTick();
-          }}
-          onFitCamera={() => {
-            fitCameraToViewport();
-            soundEngine.playUiTick();
-          }}
-          onZoomIn={() => {
-            zoomByFactor(1.22);
-            soundEngine.playUiTick();
-          }}
-          onZoomOut={() => {
-            zoomByFactor(0.82);
-            soundEngine.playUiTick();
-          }}
           onToggleHideUi={() => {
             setIsUiHidden((v) => !v);
             soundEngine.playUiTick();
@@ -819,10 +845,26 @@ export default function App() {
             soundEngine.playUiTick();
             setIsMapManagerOpen(true);
           }}
+          onSaveChanges={handleSaveChanges}
+          onOpenNewspaper={() => {
+            soundEngine.playUiTick();
+            simRef.current!.markNewsRead();
+            setStats(simRef.current!.getStats());
+            setIsNewspaperOpen(true);
+          }}
           onToggleMute={() => {
             const next = !isMuted;
             soundEngine.setMuted(next);
             setIsMuted(next);
+          }}
+          onToggleMusic={() => {
+            const next = !isMusicEnabled;
+            if (next && isMuted) {
+              soundEngine.setMuted(false);
+              setIsMuted(false);
+            }
+            soundEngine.setMusicEnabled(next);
+            setIsMusicEnabled(next);
           }}
           onOpenPause={() => {
             soundEngine.playUiTick();
@@ -1020,14 +1062,24 @@ export default function App() {
         onDeleteSavedMap={handleDeleteSavedMap}
       />
 
+      {/* Morning Newspaper Broadsheet Modal */}
+      <NewspaperModal
+        isOpen={isNewspaperOpen}
+        mapName={mapName}
+        editions={simRef.current.newspapers}
+        onClose={() => setIsNewspaperOpen(false)}
+      />
+
       {/* Pause Modal */}
       <PauseModal
         isOpen={gameState === 'PAUSED'}
         mapName={mapName}
+        justSaved={justSaved}
         onResume={() => {
           soundEngine.playUiTick();
           setGameState('PLAYING');
         }}
+        onSaveChanges={handleSaveChanges}
         onOpenMapManager={() => {
           setGameState('PLAYING');
           setIsMapManagerOpen(true);

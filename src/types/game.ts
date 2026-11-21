@@ -31,6 +31,7 @@ export type BuildingCategory =
   | 'workplace'
   | 'factory'
   | 'commercial'
+  | 'crops'
   | 'park';
 
 export type TerrainType = 'grass' | 'water' | 'forest';
@@ -110,11 +111,13 @@ export type HobbyKind =
   | 'raking_leaves'
   | 'harvesting'
   | 'gardening'
-  | 'sunbathing';
+  | 'sunbathing'
+  | 'bird_feeding'
+  | 'skateboarding';
 
 export type CarryingItem = 'fish' | 'bag' | 'coffee' | 'flowers' | 'books' | 'clothes' | 'produce';
 
-export type StallGoodsType = 'fish' | 'clothes' | 'produce' | 'crafts' | 'contraband';
+export type StallGoodsType = 'fish' | 'clothes' | 'produce' | 'crafts' | 'kayak' | 'rowboat' | 'swim' | 'contraband';
 
 export type PersonRole =
   | 'woodcutter'
@@ -136,7 +139,12 @@ export type PersonRole =
   | 'cleaner'
   | 'repairer'
   | 'invader'
-  | 'voter';
+  | 'voter'
+  | 'escapee'
+  | 'paperboy'
+  | 'kayaker'
+  | 'student'
+  | 'builder';
 
 export interface Person {
   id: string;
@@ -173,7 +181,12 @@ export interface Person {
     | 'repairing'
     | 'fixing_bridge'
     | 'invading'
-    | 'voting';
+    | 'voting'
+    | 'escaping'
+    | 'delivering'
+    | 'kayaking'
+    | 'field_trip'
+    | 'building';
   homeBuildingId?: string;
   destBuildingId?: string;
   destStallId?: string;
@@ -183,6 +196,10 @@ export interface Person {
   isShadyBuyer?: boolean;
   raidStallId?: string;
   shootCooldown?: number;
+  hasTank?: boolean;
+  health?: number;
+  isPanicking?: boolean;
+  deliveryQueueIds?: string[];
   caughtFishCount?: number;
   isContaminated?: boolean;
   weddingRole?: 'bride' | 'groom' | 'guest';
@@ -201,6 +218,10 @@ export interface Person {
   carryingItem?: CarryingItem;
   pedestrianPath?: GridPoint[];
   pedestrianPathIndex?: number;
+  rerouteCooldown?: number;
+  waterActivity?: 'kayak' | 'rowing' | 'swim';
+  waterTileX?: number;
+  waterTileY?: number;
   holdTimer: number;
 }
 
@@ -541,10 +562,46 @@ export interface Car {
   targetFireId?: string;
   targetCrashId?: string;
   targetRaidStallId?: string;
+  targetEscapeeId?: string;
   parkedAtProtest?: boolean;
   parkedAtFire?: boolean;
   parkedAtCrash?: boolean;
   parkedAtRaid?: boolean;
+  isReturningToStation?: boolean;
+  returnStationId?: string;
+  returnJailId?: string;
+}
+
+export interface TrashItem {
+  id: string;
+  x: number;
+  y: number;
+  wx: number;
+  wy: number;
+  inWater: boolean;
+  kind: 'bottle' | 'bag' | 'can' | 'wrapper';
+  age: number;
+}
+
+export interface PorchPaperProp {
+  id?: string;
+  x?: number;
+  y?: number;
+  wx: number;
+  wy: number;
+  age: number;
+  maxAge?: number;
+}
+
+export interface NewspaperEdition {
+  id: string;
+  day: number;
+  season: SeasonType;
+  weather: WeatherType;
+  headline: string;
+  summary: string;
+  highlights: string[];
+  publishedAtTime: string;
 }
 
 export interface HonkRipple {
@@ -556,10 +613,9 @@ export interface HonkRipple {
 
 export interface SimulationStats {
   dayCount: number;
-  minutesOfDay: number; // 0..1440 (1 game minute = 1 real second at 1x)
+  minutesOfDay: number; // 0..1440 (4 game minutes = 1 real second at 1x -> 1 real min = 4 game hrs)
   formattedTime: string;
   timePhase: TimePhase;
-  rushPeriodLabel: string;
   population: number;
   buildingsCount: number;
   roadTilesCount: number;
@@ -602,6 +658,10 @@ export interface SimulationStats {
   electionActive: boolean;
   electionRemaining: number;
   brokenBridgesCount: number;
+  oceanTrashCount: number;
+  unreadNewsCount: number;
+  dailyNewsHeadline: string;
+  activeEscapees: number;
   season: SeasonType;
   weather: WeatherType;
   chaosCooldowns: ChaosCooldowns;

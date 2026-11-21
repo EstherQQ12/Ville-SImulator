@@ -3,6 +3,10 @@ class SoundEngine {
   private muted: boolean = false;
   private lastHornTime: number = 0;
   private lastChopTime: number = 0;
+  private lastGunshotTime: number = 0;
+  private musicEnabled: boolean = false;
+  private musicTimer: number | null = null;
+  private musicStep: number = 0;
 
   private ensureContext(): AudioContext | null {
     if (this.muted) return null;
@@ -21,10 +25,98 @@ class SoundEngine {
 
   public setMuted(muted: boolean) {
     this.muted = muted;
+    if (muted) {
+      this.stopMusic();
+    } else if (this.musicEnabled) {
+      this.startMusic();
+    }
   }
 
   public isMuted(): boolean {
     return this.muted;
+  }
+
+  public isMusicEnabled(): boolean {
+    return this.musicEnabled;
+  }
+
+  public setMusicEnabled(enabled: boolean) {
+    this.musicEnabled = enabled;
+    if (enabled && !this.muted) {
+      this.startMusic();
+    } else {
+      this.stopMusic();
+    }
+  }
+
+  public startMusic() {
+    if (this.muted || !this.musicEnabled) return;
+    if (this.musicTimer !== null) return;
+    const playBar = () => {
+      if (this.muted || !this.musicEnabled) return;
+      const ctx = this.ensureContext();
+      if (!ctx) return;
+      // Warm calm relaxing Lo-Fi chord progression: Fmaj7 -> Em7 -> Dm9 -> Cmaj7
+      const chords: number[][] = [
+        [174.61, 220.0, 261.63, 329.63], // Fmaj7
+        [164.81, 196.0, 246.94, 293.66], // Em7
+        [146.83, 174.61, 220.0, 329.63], // Dm9
+        [130.81, 196.0, 246.94, 329.63], // Cmaj7
+      ];
+      const melodies = [523.25, 493.88, 440.0, 392.0];
+      const idx = this.musicStep % chords.length;
+      const chord = chords[idx];
+      const now = ctx.currentTime;
+
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(720, now);
+      filter.connect(ctx.destination);
+
+      chord.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = i === 0 ? 'sine' : 'triangle';
+        // Subtle warm vinyl detune drift
+        osc.frequency.setValueAtTime(freq, now);
+        osc.detune.setValueAtTime((i % 2 === 0 ? 1 : -1) * 4, now);
+
+        const start = now + i * 0.04;
+        gain.gain.setValueAtTime(0.0008, start);
+        gain.gain.linearRampToValueAtTime(i === 0 ? 0.022 : 0.013, start + 0.35);
+        gain.gain.exponentialRampToValueAtTime(0.0008, start + 3.1);
+
+        osc.connect(gain);
+        gain.connect(filter);
+        osc.start(start);
+        osc.stop(start + 3.2);
+      });
+
+      // Soft muted electric-piano bell note midway through the bar
+      const melOsc = ctx.createOscillator();
+      const melGain = ctx.createGain();
+      melOsc.type = 'sine';
+      melOsc.frequency.setValueAtTime(melodies[idx], now + 1.45);
+      melGain.gain.setValueAtTime(0.0005, now + 1.45);
+      melGain.gain.linearRampToValueAtTime(0.014, now + 1.52);
+      melGain.gain.exponentialRampToValueAtTime(0.0005, now + 2.85);
+      melOsc.connect(melGain);
+      melGain.connect(filter);
+      melOsc.start(now + 1.45);
+      melOsc.stop(now + 2.9);
+
+      this.musicStep++;
+    };
+
+    playBar();
+    this.musicTimer = window.setInterval(playBar, 3200);
+  }
+
+  public stopMusic() {
+    if (this.musicTimer !== null) {
+      window.clearInterval(this.musicTimer);
+      this.musicTimer = null;
+    }
   }
 
   public playPlaceBuilding() {
@@ -515,6 +607,52 @@ class SoundEngine {
       osc.start(t);
       osc.stop(t + 0.15);
     });
+  }
+
+  public playGunshot() {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const wallNow = performance.now();
+    if (wallNow - this.lastGunshotTime < 140) return;
+    this.lastGunshotTime = wallNow;
+
+    const now = ctx.currentTime;
+    const bufferSize = Math.floor(ctx.sampleRate * 0.09);
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.022));
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(1150, now);
+    filter.Q.setValueAtTime(0.9, now);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.08, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    noise.start(now);
+
+    // Subtle punch thump
+    const osc = ctx.createOscillator();
+    const oscGain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(190, now);
+    osc.frequency.exponentialRampToValueAtTime(55, now + 0.06);
+    oscGain.gain.setValueAtTime(0.055, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.065);
+    osc.connect(oscGain);
+    oscGain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.07);
   }
 }
 
