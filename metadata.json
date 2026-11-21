@@ -1,0 +1,6 @@
+{
+  "name": "Ville Create",
+  "description": "An interactive 2D city map builder and real-time traffic simulator with custom hand-drawn building icons, realistic rush-hour traffic jams, and a 1-minute-per-second day-night cycle.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
