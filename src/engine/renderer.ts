@@ -25,6 +25,8 @@ export interface HoverState {
   tileX: number;
   tileY: number;
   visible: boolean;
+  worldX?: number;
+  worldY?: number;
 }
 
 export interface RenderOptions {
@@ -147,7 +149,10 @@ export function renderSimulation(
   ctx.fillRect(0, 0, width, height);
 
   ctx.save();
-  ctx.translate(width / 2, height / 2);
+  const shakeAmt = sim.earthquakeShakeIntensity > 0 ? sim.earthquakeShakeIntensity : 0;
+  const shakeX = shakeAmt > 0 ? Math.sin(wallTimeSeconds * 54) * 5.5 * shakeAmt : 0;
+  const shakeY = shakeAmt > 0 ? Math.cos(wallTimeSeconds * 43) * 4.5 * shakeAmt : 0;
+  ctx.translate(width / 2 + shakeX, height / 2 + shakeY);
   ctx.scale(camera.zoom, camera.zoom);
   ctx.translate(-camera.x, -camera.y);
 
@@ -205,6 +210,20 @@ export function renderSimulation(
         }
       }
 
+      if (tile.isFlooded && tile.terrain !== 'water') {
+        const waveShift = Math.sin(wallTimeSeconds * 3.1 + x * 0.7 + y * 0.5) * 0.06;
+        ctx.fillStyle = `rgba(2, 132, 199, ${0.42 + waveShift})`;
+        ctx.fillRect(wx, wy, TILE_SIZE, TILE_SIZE);
+        ctx.strokeStyle = 'rgba(186, 230, 253, 0.45)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(wx + 6, wy + 15 + Math.sin(wallTimeSeconds * 2.5 + x) * 2);
+        ctx.lineTo(wx + 22, wy + 15 + Math.sin(wallTimeSeconds * 2.5 + x) * 2);
+        ctx.moveTo(wx + 24, wy + 33 + Math.cos(wallTimeSeconds * 2.2 + y) * 2);
+        ctx.lineTo(wx + 41, wy + 33 + Math.cos(wallTimeSeconds * 2.2 + y) * 2);
+        ctx.stroke();
+      }
+
       if (showGrid) {
         ctx.strokeStyle =
           sim.season === 'Winter' ? 'rgba(51, 65, 85, 0.14)' : 'rgba(255, 255, 255, 0.14)';
@@ -236,20 +255,23 @@ export function renderSimulation(
     }
   }
 
-  // 3.5 Render Felled Tree Stumps, Trash Items, Porch Newspapers & Pop-up Market Stalls
+  // 3.5 Render Felled Tree Stumps, Trash Items & Pop-up Market Stalls
   drawChoppedTreeEvents(ctx, sim);
   drawTrashItems(ctx, sim, wallTimeSeconds);
-  drawPorchPapers(ctx, sim);
   drawMarketStalls(ctx, sim, wallTimeSeconds);
 
-  // 4. Render Cars & Crashes
+  // 4. Render Cars, Hover Destination & Crashes
   for (const car of sim.cars) {
     drawCar(ctx, car, nightFactor);
   }
   drawCarCrashes(ctx, sim, wallTimeSeconds);
+  if (hover.visible && hover.worldX !== undefined && hover.worldY !== undefined) {
+    drawHoveredCarTooltip(ctx, sim, hover.worldX, hover.worldY);
+  }
 
-  // 4.5 Render Snowmen, People, Wood Chips, Confetti, Flames & Smoke
+  // 4.5 Render Snowmen, Animals, People, Wood Chips, Confetti, Flames & Smoke
   drawSnowmen(ctx, sim);
+  drawAnimals(ctx, sim, wallTimeSeconds);
   drawPeople(ctx, sim, wallTimeSeconds);
   drawFires(ctx, sim, wallTimeSeconds);
   drawWoodChips(ctx, sim);
@@ -315,6 +337,7 @@ export function renderSimulation(
   drawSleepZzz(ctx, sim);
   drawFloatingLabels(ctx, sim);
   drawNukeBlasts(ctx, sim);
+  drawTornado(ctx, sim, wallTimeSeconds);
   drawWeatherEffects(ctx, sim);
 
   // 8. Selection Reticle & Tool Hover Preview
@@ -325,7 +348,7 @@ export function renderSimulation(
   }
 
   if (hover.visible && hover.tileX >= 0 && hover.tileX < GRID_COLS && hover.tileY >= 0 && hover.tileY < GRID_ROWS) {
-    drawHoverPreview(ctx, sim, hover.tileX, hover.tileY, toolMode, activeBlueprint);
+    drawHoverPreview(ctx, sim, hover, toolMode, activeBlueprint);
   }
 
   ctx.restore();
@@ -1221,33 +1244,138 @@ function drawBuildingTile(
     bld.category === 'park'
       ? '#3B7A46'
       : bld.category === 'crops'
-      ? '#5B8A3C'
+      ? '#6B4423'
       : '#CBD5E1';
   ctx.fillRect(wx + 4, wy + 4, TILE_SIZE - 8, TILE_SIZE - 8);
 
-  // Crisp pixel-art building icon
-  const cached = getOrCreateIconCanvas(bld.iconGrid);
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(cached.dayCanvas, wx + 4, wy + 4, TILE_SIZE - 8, TILE_SIZE - 8);
-  ctx.imageSmoothingEnabled = true;
+  if (bld.category === 'park') {
+    const variant = bld.parkVariant || 'playground';
+    if (variant === 'playground') {
+      // Soft green lawn + sandy play pit + red slide + swing set
+      ctx.fillStyle = '#4ADE80';
+      ctx.fillRect(wx + 4, wy + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+      ctx.fillStyle = '#FDE68A';
+      ctx.fillRect(wx + 8, wy + 18, TILE_SIZE - 16, 18);
+      // Slide
+      ctx.fillStyle = '#EF4444';
+      ctx.fillRect(wx + 11, wy + 12, 4, 12);
+      ctx.fillStyle = '#FACC15';
+      ctx.beginPath();
+      ctx.moveTo(wx + 14, wy + 13);
+      ctx.lineTo(wx + 23, wy + 25);
+      ctx.lineTo(wx + 20, wy + 26);
+      ctx.lineTo(wx + 12, wy + 15);
+      ctx.closePath();
+      ctx.fill();
+      // Swing A-frame
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(wx + 26, wy + 24);
+      ctx.lineTo(wx + 28, wy + 12);
+      ctx.lineTo(wx + 37, wy + 12);
+      ctx.lineTo(wx + 39, wy + 24);
+      ctx.stroke();
+      ctx.strokeStyle = '#0284C7';
+      ctx.lineWidth = 1.1;
+      ctx.beginPath();
+      ctx.moveTo(wx + 30.5, wy + 12);
+      ctx.lineTo(wx + 30.5, wy + 20);
+      ctx.moveTo(wx + 34.5, wy + 12);
+      ctx.lineTo(wx + 34.5, wy + 20);
+      ctx.stroke();
+    } else if (variant === 'garden') {
+      // Cozy botanical flower garden + stone path + fountain
+      ctx.fillStyle = '#4D9B56';
+      ctx.fillRect(wx + 4, wy + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+      ctx.fillStyle = '#E2E8F0';
+      ctx.fillRect(wx + 21, wy + 4, 6, TILE_SIZE - 8);
+      ctx.fillRect(wx + 4, wy + 21, TILE_SIZE - 8, 6);
+      const bedPositions = [
+        [10, 10, '#F43F5E'],
+        [30, 10, '#FACC15'],
+        [10, 30, '#EC4899'],
+        [30, 30, '#A855F7'],
+      ] as const;
+      for (const [bx, by, col] of bedPositions) {
+        ctx.fillStyle = '#15803D';
+        ctx.fillRect(wx + bx, wy + by, 8, 8);
+        ctx.fillStyle = col;
+        ctx.fillRect(wx + bx + 1.5, wy + by + 1.5, 2.2, 2.2);
+        ctx.fillRect(wx + bx + 4.5, wy + by + 4.5, 2.2, 2.2);
+      }
+      ctx.fillStyle = '#38BDF8';
+      ctx.beginPath();
+      ctx.arc(wx + TILE_SIZE / 2, wy + TILE_SIZE / 2, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // Multipurpose sports pitch with crisp lines & white goals
+      ctx.fillStyle = '#22A355';
+      ctx.fillRect(wx + 4, wy + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(wx + 7, wy + 8, TILE_SIZE - 14, TILE_SIZE - 16);
+      ctx.beginPath();
+      ctx.moveTo(wx + TILE_SIZE / 2, wy + 8);
+      ctx.lineTo(wx + TILE_SIZE / 2, wy + TILE_SIZE - 8);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(wx + TILE_SIZE / 2, wy + TILE_SIZE / 2, 4.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = '#F8FAFC';
+      ctx.fillRect(wx + 5.5, wy + 19, 2.5, 10);
+      ctx.fillRect(wx + TILE_SIZE - 8, wy + 19, 2.5, 10);
+    }
+  } else {
+    // Crisp pixel-art building icon
+    const cached = getOrCreateIconCanvas(bld.iconGrid);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(cached.dayCanvas, wx + 4, wy + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+    ctx.imageSmoothingEnabled = true;
+  }
 
-  // Animated swaying golden wheat/corn stalks on Crops plots (except deep snow winter)
+  // Animated swaying crop stalks scaled by growth stage (0..3)
   if (bld.category === 'crops') {
+    const stage = bld.cropStage ?? 1;
     ctx.save();
-    const sway = Math.sin(wallTimeSeconds * 2.4 + tile.x * 0.8 + tile.y * 0.5) * 1.6;
-    ctx.strokeStyle = sim.season === 'Winter' ? '#E2E8F0' : sim.season === 'Spring' ? '#84CC16' : '#FACC15';
-    ctx.lineWidth = 1.4;
+    // Soil furrows
+    ctx.fillStyle = 'rgba(69, 26, 3, 0.45)';
     for (let row = 0; row < 3; row++) {
-      for (let col = 0; col < 4; col++) {
-        const sx = wx + 11 + col * 8.5;
-        const sy = wy + 18 + row * 9;
-        ctx.beginPath();
-        ctx.moveTo(sx, sy);
-        ctx.lineTo(sx + sway, sy - 5.5);
-        ctx.stroke();
+      ctx.fillRect(wx + 7, wy + 14 + row * 9, TILE_SIZE - 14, 3);
+    }
+    if (stage > 0) {
+      const sway = Math.sin(wallTimeSeconds * 2.4 + tile.x * 0.8 + tile.y * 0.5) * (0.7 + stage * 0.45);
+      const height = 2 + stage * 1.8;
+      ctx.strokeStyle =
+        sim.season === 'Winter'
+          ? '#E2E8F0'
+          : stage === 1
+          ? '#4ADE80'
+          : stage === 2
+          ? '#A3E635'
+          : '#FACC15';
+      ctx.lineWidth = stage >= 3 ? 1.7 : 1.3;
+      for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 4; col++) {
+          const sx = wx + 11 + col * 8.5;
+          const sy = wy + 16 + row * 9;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(sx + sway, sy - height);
+          ctx.stroke();
+        }
       }
     }
     ctx.restore();
+  }
+
+  // Subtle emerald cellar hatch badge if building has an underground bunker/basement
+  if (bld.hasBasement) {
+    ctx.fillStyle = '#059669';
+    ctx.fillRect(wx + TILE_SIZE - 12, wy + 5, 7, 7);
+    ctx.strokeStyle = '#ECFDF5';
+    ctx.lineWidth = 0.8;
+    ctx.strokeRect(wx + TILE_SIZE - 12, wy + 5, 7, 7);
   }
 }
 
@@ -1302,18 +1430,176 @@ function drawTrashItems(
   ctx.restore();
 }
 
-function drawPorchPapers(ctx: CanvasRenderingContext2D, sim: CitySimulation) {
-  if (sim.porchPapers.length === 0) return;
+function drawHoveredCarTooltip(
+  ctx: CanvasRenderingContext2D,
+  sim: CitySimulation,
+  worldX: number,
+  worldY: number
+) {
+  let nearest: Car | null = null;
+  let bestDist = 18;
+  for (const car of sim.cars) {
+    const d = Math.hypot(car.wx - worldX, car.wy - worldY);
+    if (d < bestDist) {
+      bestDist = d;
+      nearest = car;
+    }
+  }
+  if (!nearest || !nearest.destLabel) return;
+
+  const text = `→ ${nearest.destLabel}`;
   ctx.save();
-  for (const pp of sim.porchPapers) {
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
-    ctx.fillRect(pp.wx - 3.2, pp.wy - 1.2, 7.4, 4.8);
-    ctx.fillStyle = '#F8FAFC';
-    ctx.fillRect(pp.wx - 3.6, pp.wy - 2, 7.2, 4.4);
-    ctx.fillStyle = '#1E293B';
-    ctx.fillRect(pp.wx - 2.8, pp.wy - 1.3, 5.6, 1.1);
-    ctx.fillStyle = '#94A3B8';
-    ctx.fillRect(pp.wx - 2.8, pp.wy + 0.5, 3.6, 0.9);
+  ctx.font = '600 10px Inter, system-ui, sans-serif';
+  const tw = ctx.measureText(text).width;
+  const px = Math.round(nearest.wx - (tw + 12) / 2);
+  const py = Math.round(nearest.wy - 26);
+
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+  ctx.beginPath();
+  ctx.roundRect(px, py, tw + 12, 16, 4);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(250, 204, 21, 0.75)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = '#FEF9C3';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, px + 6, py + 8);
+  ctx.restore();
+}
+
+function drawAnimals(
+  ctx: CanvasRenderingContext2D,
+  sim: CitySimulation,
+  wallTimeSeconds: number
+) {
+  if (sim.animals.length === 0) return;
+  ctx.save();
+  for (const a of sim.animals) {
+    ctx.save();
+    ctx.translate(a.wx, a.wy);
+    if (a.vx < -0.5) {
+      ctx.scale(-1, 1);
+    }
+
+    if (a.kind === 'bird') {
+      const flap = Math.sin(wallTimeSeconds * 16 + a.animPhase) * 2.5;
+      const altitude = a.state === 'flying' ? -8 : -Math.abs(Math.sin(wallTimeSeconds * 5 + a.animPhase)) * 1.4;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
+      ctx.beginPath();
+      ctx.ellipse(0, 3, 2.8, 1.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#38BDF8';
+      ctx.beginPath();
+      ctx.ellipse(0, altitude, 2.8, 1.8, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#0284C7';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(-2, altitude - flap * 0.5);
+      ctx.lineTo(0, altitude);
+      ctx.lineTo(2, altitude - flap * 0.5);
+      ctx.stroke();
+      ctx.fillStyle = '#FACC15';
+      ctx.fillRect(2.6, altitude - 0.5, 1.4, 0.9);
+    } else if (a.kind === 'cow') {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.24)';
+      ctx.beginPath();
+      ctx.ellipse(0, 3.2, 5.5, 2.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const bob = a.state === 'roaming' ? Math.abs(Math.sin(a.animPhase)) * 0.8 : 0;
+      ctx.fillStyle = '#F8FAFC';
+      ctx.fillRect(-4.5, -3.5 - bob, 8, 5);
+      // Black cow patches
+      ctx.fillStyle = '#1E293B';
+      ctx.fillRect(-3.5, -3.5 - bob, 2.8, 2.6);
+      ctx.fillRect(0.6, -1.6 - bob, 2.2, 2.2);
+      // Legs
+      ctx.fillRect(-4, 1.2, 1.2, 2.2);
+      ctx.fillRect(-1.5, 1.2, 1.2, 2.2);
+      ctx.fillRect(1.8, 1.2, 1.2, 2.2);
+      // Head
+      ctx.fillStyle = '#E2E8F0';
+      ctx.fillRect(3.2, -3.8 - bob, 3, 3.2);
+      ctx.fillStyle = '#FDA4AF';
+      ctx.fillRect(4.8, -2 - bob, 1.8, 1.4);
+    } else if (a.kind === 'pig') {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.22)';
+      ctx.beginPath();
+      ctx.ellipse(0, 2.8, 4.2, 1.8, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const bob = a.state === 'roaming' ? Math.abs(Math.sin(a.animPhase)) * 0.7 : 0;
+      ctx.fillStyle = '#F9A8D4';
+      ctx.beginPath();
+      ctx.ellipse(0, -1 - bob, 4.2, 2.7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#F472B6';
+      ctx.fillRect(3.4, -2.1 - bob, 1.8, 2);
+      ctx.fillStyle = '#DB2777';
+      ctx.fillRect(-2.6, 1.3, 1, 1.6);
+      ctx.fillRect(1.4, 1.3, 1, 1.6);
+    } else {
+      // Chicken
+      const hop = Math.abs(Math.sin(wallTimeSeconds * 7 + a.animPhase)) * 1.1;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
+      ctx.beginPath();
+      ctx.ellipse(0, 2.5, 2.5, 1.1, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#FFFBEB';
+      ctx.beginPath();
+      ctx.ellipse(0, -hop, 2.4, 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#EF4444';
+      ctx.fillRect(0.6, -2.8 - hop, 1.5, 1.1);
+      ctx.fillStyle = '#F59E0B';
+      ctx.fillRect(2.1, -0.6 - hop, 1.3, 0.9);
+    }
+
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function drawTornado(
+  ctx: CanvasRenderingContext2D,
+  sim: CitySimulation,
+  wallTimeSeconds: number
+) {
+  if (!sim.crises.tornadoActive) return;
+  const x = sim.crises.tornadoWx;
+  const y = sim.crises.tornadoWy;
+
+  ctx.save();
+  // Ground dust shadow vortex
+  ctx.fillStyle = 'rgba(51, 65, 85, 0.35)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 4, 26, 11, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Stacked swirling funnel rings tapering bottom-to-top
+  for (let i = 0; i < 11; i++) {
+    const t = i / 10;
+    const sway = Math.sin(wallTimeSeconds * 9 + i * 0.7) * (3 + t * 5);
+    const ry = y - i * 8.5;
+    const radX = 5 + t * 24;
+    const radY = 2.6 + t * 5.2;
+    ctx.fillStyle =
+      i % 2 === 0 ? 'rgba(71, 85, 105, 0.72)' : 'rgba(100, 116, 139, 0.62)';
+    ctx.beginPath();
+    ctx.ellipse(x + sway, ry, radX, radY, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Orbiting debris specks
+  ctx.fillStyle = '#CBD5E1';
+  for (let d = 0; d < 8; d++) {
+    const ang = wallTimeSeconds * 8 + d * 0.8;
+    const rx = x + Math.cos(ang) * (10 + d * 2.8);
+    const ry = y - 12 - d * 8 + Math.sin(ang) * 4;
+    ctx.fillRect(rx, ry, 2.5, 2.5);
   }
   ctx.restore();
 }
@@ -2302,14 +2588,20 @@ function drawPersonSprite(
     ctx.fillStyle = '#1E293B';
     ctx.fillRect(-3.4, bodyY - 3.6, 6.8, 1);
     ctx.fillRect(-3.4, bodyY - 1.4, 6.8, 1);
-  } else if (p.role === 'paperboy') {
-    // Courier satchel strap
-    ctx.strokeStyle = '#78350F';
-    ctx.lineWidth = 1.2;
-    ctx.beginPath();
-    ctx.moveTo(-2.8, bodyY - 4.5);
-    ctx.lineTo(2.8, bodyY + 0.4);
-    ctx.stroke();
+  } else if (p.role === 'farmer') {
+    // Denim overalls
+    ctx.fillStyle = '#1D4ED8';
+    ctx.fillRect(-2.6, bodyY - 2.8, 5.2, 3.8);
+  } else if (p.role === 'butcher') {
+    // Crisp white butcher apron
+    ctx.fillStyle = '#F8FAFC';
+    ctx.fillRect(-2.6, bodyY - 4, 5.2, 5);
+    ctx.fillStyle = '#DC2626';
+    ctx.fillRect(-1.4, bodyY - 2.2, 2.8, 0.9);
+  } else if (p.role === 'parent') {
+    // Warm cardigan trim
+    ctx.fillStyle = '#FEF3C7';
+    ctx.fillRect(-0.8, bodyY - 4.8, 1.6, 5.5);
   } else if (p.role === 'student') {
     // School backpack straps
     ctx.fillStyle = '#0284C7';
@@ -2476,12 +2768,22 @@ function drawPersonSprite(
     ctx.arc(0, bodyY - 8.3, 3.1, Math.PI, 0);
     ctx.fill();
     ctx.fillRect(-3.6, bodyY - 8.9, 7.2, 1.2);
-  } else if (p.role === 'paperboy') {
-    // Classic flat brown newsboy cap
+  } else if (p.role === 'farmer') {
+    // Wide straw farm sun hat
+    ctx.fillStyle = '#FDE047';
+    ctx.fillRect(-4.2, bodyY - 10.2, 8.4, 1.3);
+    ctx.fillStyle = '#EAB308';
+    ctx.fillRect(-2.5, bodyY - 12, 5, 1.9);
+  } else if (p.role === 'butcher') {
+    // Crisp white butcher cap
+    ctx.fillStyle = '#F8FAFC';
+    ctx.fillRect(-3, bodyY - 10.6, 6, 2);
+  } else if (p.role === 'parent') {
+    // Neat hair / cap
     ctx.fillStyle = '#78350F';
-    ctx.fillRect(-3.1, bodyY - 10.3, 6.2, 1.8);
-    ctx.fillStyle = '#451A03';
-    ctx.fillRect(0.2, bodyY - 9.8, 3.5, 0.9);
+    ctx.beginPath();
+    ctx.arc(0, bodyY - 8.4, 2.7, Math.PI, 0);
+    ctx.fill();
   } else if (p.role === 'student' && p.hatColor) {
     ctx.fillStyle = p.hatColor;
     ctx.beginPath();
@@ -2899,12 +3201,40 @@ function drawPersonSprite(
       ctx.ellipse(10, 1.2 - peck * 0.4, 1.8, 1.2, 0, 0, Math.PI * 2);
       ctx.fill();
     }
-  } else if (p.role === 'paperboy') {
-    // Rolled crisp white morning newspaper in hand
-    ctx.fillStyle = '#F8FAFC';
-    ctx.fillRect(2.8, bodyY - 4.4, 4.2, 2.2);
-    ctx.fillStyle = '#1E293B';
-    ctx.fillRect(3.2, bodyY - 4, 3.2, 0.7);
+  } else if (p.role === 'farmer') {
+    // Wooden pitchfork / hoe
+    ctx.strokeStyle = '#78350F';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(3.1, bodyY + 1);
+    ctx.lineTo(3.1, bodyY - 10);
+    ctx.stroke();
+    ctx.strokeStyle = '#CBD5E1';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(2, bodyY - 10);
+    ctx.lineTo(4.2, bodyY - 10);
+    ctx.moveTo(2, bodyY - 10);
+    ctx.lineTo(2, bodyY - 12);
+    ctx.moveTo(3.1, bodyY - 10);
+    ctx.lineTo(3.1, bodyY - 12.2);
+    ctx.moveTo(4.2, bodyY - 10);
+    ctx.lineTo(4.2, bodyY - 12);
+    ctx.stroke();
+  } else if (p.role === 'butcher') {
+    // Shiny steel cleaver prop
+    ctx.strokeStyle = '#78350F';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(2.8, bodyY - 2);
+    ctx.lineTo(4.5, bodyY - 4);
+    ctx.stroke();
+    ctx.fillStyle = '#E2E8F0';
+    ctx.fillRect(3.8, bodyY - 6.8, 2.8, 3);
+  } else if (p.role === 'parent') {
+    // Tote bag for school pickup/drop-off
+    ctx.fillStyle = '#D97706';
+    ctx.fillRect(-4.6, bodyY - 2.2, 2.2, 2.8);
   } else if (p.role === 'kayaker') {
     if (p.waterActivity === 'swim') {
       // Bright swim ring / floatie carried on walk to water
@@ -3807,12 +4137,21 @@ function drawWeatherEffects(ctx: CanvasRenderingContext2D, sim: CitySimulation) 
   const mapW = GRID_COLS * TILE_SIZE;
   const mapH = GRID_ROWS * TILE_SIZE;
 
-  // Overcast wash during Rain or Storm
+  // Atmospheric weather washes
   if (sim.weather === 'Storm') {
     ctx.fillStyle = 'rgba(15, 23, 42, 0.24)';
     ctx.fillRect(0, 0, mapW, mapH);
   } else if (sim.weather === 'Rain') {
     ctx.fillStyle = 'rgba(30, 58, 138, 0.12)';
+    ctx.fillRect(0, 0, mapW, mapH);
+  } else if (sim.weather === 'Cloudy') {
+    ctx.fillStyle = 'rgba(148, 163, 184, 0.15)';
+    ctx.fillRect(0, 0, mapW, mapH);
+  } else if (sim.weather === 'Foggy') {
+    ctx.fillStyle = 'rgba(226, 232, 240, 0.34)';
+    ctx.fillRect(0, 0, mapW, mapH);
+  } else if (sim.weather === 'Windy') {
+    ctx.fillStyle = 'rgba(186, 230, 253, 0.06)';
     ctx.fillRect(0, 0, mapW, mapH);
   }
 
@@ -3834,6 +4173,32 @@ function drawWeatherEffects(ctx: CanvasRenderingContext2D, sim: CitySimulation) 
       ctx.moveTo(pt.x, pt.y);
       ctx.lineTo(pt.x + pt.vx * 0.032, pt.y + pt.size);
       ctx.stroke();
+    }
+  } else if (sim.weather === 'Windy') {
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 1.2;
+    for (const pt of sim.weatherParticles) {
+      if (pt.color) {
+        ctx.globalAlpha = pt.alpha;
+        ctx.fillStyle = pt.color;
+        ctx.beginPath();
+        ctx.ellipse(pt.x, pt.y, pt.size, pt.size * 0.55, pt.x * 0.04, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.globalAlpha = pt.alpha;
+        ctx.strokeStyle = 'rgba(241, 245, 249, 0.65)';
+        ctx.beginPath();
+        ctx.moveTo(pt.x, pt.y);
+        ctx.lineTo(pt.x + 14 + pt.size * 2, pt.y + 1.5);
+        ctx.stroke();
+      }
+    }
+  } else if (sim.weather === 'Foggy') {
+    for (const pt of sim.weatherParticles) {
+      ctx.fillStyle = `rgba(241, 245, 249, ${pt.alpha * 0.35})`;
+      ctx.beginPath();
+      ctx.ellipse(pt.x, pt.y, pt.size * 5, pt.size * 2.2, 0, 0, Math.PI * 2);
+      ctx.fill();
     }
   } else if (sim.weather === 'Snow') {
     for (const pt of sim.weatherParticles) {
@@ -3889,17 +4254,48 @@ function drawCornerReticle(
 function drawHoverPreview(
   ctx: CanvasRenderingContext2D,
   sim: CitySimulation,
-  tx: number,
-  ty: number,
+  hover: HoverState,
   toolMode: ToolMode,
   activeBlueprint: BuildingBlueprint | null
 ) {
+  const tx = hover.tileX;
+  const ty = hover.tileY;
   const tile = sim.getTile(tx, ty);
   if (!tile) return;
   const wx = tx * TILE_SIZE;
   const wy = ty * TILE_SIZE;
 
   if (toolMode === 'pan') {
+    return;
+  }
+
+  if (toolMode === 'camera') {
+    const cx = hover.worldX ?? wx + TILE_SIZE / 2;
+    const cy = hover.worldY ?? wy + TILE_SIZE / 2;
+    const vw = 360;
+    const vh = 240;
+    const rx = cx - vw / 2;
+    const ry = cy - vh / 2;
+    const canShoot = sim.canPublishTodayPhotoNews();
+
+    ctx.save();
+    ctx.strokeStyle = canShoot ? '#FACC15' : '#94A3B8';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.strokeRect(rx, ry, vw, vh);
+    ctx.setLineDash([]);
+    ctx.fillStyle = canShoot ? 'rgba(250, 204, 21, 0.08)' : 'rgba(148, 163, 184, 0.1)';
+    ctx.fillRect(rx, ry, vw, vh);
+
+    const tag = canShoot ? 'CLICK TO SNAP NEWS PHOTO' : 'DAILY PHOTO ALREADY TAKEN';
+    ctx.font = '700 10px Inter, system-ui, sans-serif';
+    const tw = ctx.measureText(tag).width;
+    ctx.fillStyle = canShoot ? '#0F172A' : '#1E293B';
+    ctx.fillRect(cx - (tw + 12) / 2, ry - 18, tw + 12, 16);
+    ctx.fillStyle = canShoot ? '#FACC15' : '#CBD5E1';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(tag, cx - tw / 2, ry - 10);
+    ctx.restore();
     return;
   }
 

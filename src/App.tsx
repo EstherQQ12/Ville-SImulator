@@ -61,6 +61,7 @@ export default function App() {
   const zebraPaintTargetRef = useRef<boolean>(true);
   const footbridgePaintTargetRef = useRef<boolean>(true);
   const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const sessionInitializedRef = useRef<boolean>(false);
 
   const [gameState, setGameState] = useState<GameState>('TITLE_MENU');
   const [selectedPresetId, setSelectedPresetId] = useState<string>(PRESET_MAPS[0].id);
@@ -80,6 +81,7 @@ export default function App() {
   const [isMusicEnabled, setIsMusicEnabled] = useState<boolean>(false);
   const [isUiHidden, setIsUiHidden] = useState<boolean>(false);
   const [isNewspaperOpen, setIsNewspaperOpen] = useState<boolean>(false);
+  const [draftNewsPhoto, setDraftNewsPhoto] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState<boolean>(false);
 
   const [selection, setSelection] = useState<SelectionTarget | null>(null);
@@ -289,6 +291,9 @@ export default function App() {
       } else if (lower === 'v') {
         setToolMode('select');
         soundEngine.playUiTick();
+      } else if (lower === 'c') {
+        setToolMode('camera');
+        soundEngine.playUiTick();
       } else if (lower === 'r') {
         setToolMode('road');
         soundEngine.playUiTick();
@@ -335,14 +340,67 @@ export default function App() {
     cam.y = Math.max(-120, Math.min(mapH + 120, cam.y));
   };
 
-  const screenToTile = (clientX: number, clientY: number): { tx: number; ty: number } => {
+  const screenToTile = (
+    clientX: number,
+    clientY: number
+  ): { tx: number; ty: number; wx: number; wy: number } => {
     const cam = cameraRef.current;
     const wx = (clientX - window.innerWidth / 2) / cam.zoom + cam.x;
     const wy = (clientY - window.innerHeight / 2) / cam.zoom + cam.y;
     return {
       tx: Math.floor(wx / TILE_SIZE),
       ty: Math.floor(wy / TILE_SIZE),
+      wx,
+      wy,
     };
+  };
+
+  const capturePhotoAtClient = (clientX: number, clientY: number) => {
+    const sim = simRef.current!;
+    const { wx, wy } = screenToTile(clientX, clientY);
+    if (!sim.canPublishTodayPhotoNews()) {
+      sim.floatingLabels.push({
+        wx,
+        wy: wy - 12,
+        text: '1 photo per day!',
+        color: '#FEF3C7',
+        bgColor: '#334155',
+        age: 0,
+        maxAge: 1.6,
+      });
+      soundEngine.playBulldoze();
+      setToolMode('pan');
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    let dataUrl: string | undefined;
+    if (canvas) {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = canvas.width / Math.max(1, rect.width);
+      const viewW = 360 * dpr;
+      const viewH = 240 * dpr;
+      const cx = (clientX - rect.left) * dpr;
+      const cy = (clientY - rect.top) * dpr;
+      const sx = Math.max(0, Math.min(canvas.width - viewW, cx - viewW / 2));
+      const sy = Math.max(0, Math.min(canvas.height - viewH, cy - viewH / 2));
+      const sw = Math.min(viewW, canvas.width);
+      const sh = Math.min(viewH, canvas.height);
+
+      const out = document.createElement('canvas');
+      out.width = 360;
+      out.height = 240;
+      const oCtx = out.getContext('2d');
+      if (oCtx) {
+        oCtx.drawImage(canvas, sx, sy, sw, sh, 0, 0, 360, 240);
+        dataUrl = out.toDataURL('image/jpeg', 0.85);
+      }
+    }
+
+    soundEngine.playCameraShutter();
+    setDraftNewsPhoto(dataUrl || null);
+    setToolMode('pan');
+    setIsNewspaperOpen(true);
   };
 
   const applyToolAtTile = (tx: number, ty: number, isClickStart: boolean) => {
@@ -428,9 +486,10 @@ export default function App() {
       return;
     }
 
-    if (mode === 'plot' && isClickStart) {
+    if (mode === 'plot') {
       const bp = activeBlueprintRef.current;
       if (bp) {
+        if (!isClickStart && bp.category === 'city_hall') return;
         if (bp.category === 'city_hall' && sim.hasCityHall()) {
           sim.floatingLabels.push({
             wx: (tx + 0.5) * TILE_SIZE,
@@ -491,6 +550,10 @@ export default function App() {
     }
 
     if (e.button === 0) {
+      if (toolModeRef.current === 'camera') {
+        capturePhotoAtClient(e.clientX, e.clientY);
+        return;
+      }
       isPaintingToolRef.current = true;
       lastPaintedTileRef.current = '';
       const { tx, ty } = screenToTile(e.clientX, e.clientY);
@@ -535,11 +598,13 @@ export default function App() {
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     }
 
-    const { tx, ty } = screenToTile(e.clientX, e.clientY);
+    const { tx, ty, wx, wy } = screenToTile(e.clientX, e.clientY);
     hoverRef.current = {
       tileX: tx,
       tileY: ty,
-      visible: gameState === 'PLAYING' && toolModeRef.current !== 'pan',
+      worldX: wx,
+      worldY: wy,
+      visible: gameState === 'PLAYING',
     };
 
     if (isPanningRef.current) {
@@ -579,10 +644,12 @@ export default function App() {
   const handleLoadMap = (map: SavedMapData) => {
     const sim = simRef.current!;
     sim.loadMap(map);
+    sessionInitializedRef.current = false;
     setSelectedPresetId(map.id);
     setMapName(map.name);
     setBlueprints(sim.getAllBlueprints());
     setSelection(null);
+    setDraftNewsPhoto(null);
     setStats(sim.getStats());
     if (gameState === 'PLAYING') {
       fitCameraToViewport();
@@ -653,7 +720,10 @@ export default function App() {
 
   const handleStartGame = () => {
     soundEngine.playUiTick();
-    simRef.current!.prepareForPlaySession();
+    if (!sessionInitializedRef.current) {
+      simRef.current!.prepareForPlaySession();
+      sessionInitializedRef.current = true;
+    }
     simRef.current!.isRunning = true;
     setStats(simRef.current!.getStats());
     setGameState('PLAYING');
@@ -970,6 +1040,7 @@ export default function App() {
             mayorAlive={stats.mayorAlive}
             electionActive={stats.electionActive}
             electionRemaining={stats.electionRemaining}
+            basementCount={stats.basementCount}
             chaosCooldowns={stats.chaosCooldowns}
             mayorSpeech={
               selectedTile.building
@@ -1062,12 +1133,34 @@ export default function App() {
         onDeleteSavedMap={handleDeleteSavedMap}
       />
 
-      {/* Morning Newspaper Broadsheet Modal */}
+      {/* Daily Photojournalism Newspaper Modal */}
       <NewspaperModal
         isOpen={isNewspaperOpen}
         mapName={mapName}
         editions={simRef.current.newspapers}
-        onClose={() => setIsNewspaperOpen(false)}
+        dayCount={stats.dayCount}
+        dayOfWeek={stats.dayOfWeek}
+        season={stats.season}
+        weather={stats.weather}
+        canPublishToday={simRef.current.canPublishTodayPhotoNews()}
+        draftPhotoDataUrl={draftNewsPhoto}
+        dailyHints={simRef.current.getDailyNewsHints()}
+        onTakePhoto={() => {
+          setIsNewspaperOpen(false);
+          setToolMode('camera');
+          soundEngine.playUiTick();
+        }}
+        onPublish={(headlineText, summaryText, photoDataUrl) => {
+          simRef.current!.publishUserNewspaper(headlineText, summaryText, photoDataUrl);
+          setDraftNewsPhoto(null);
+          setStats(simRef.current!.getStats());
+          soundEngine.playSaveIcon();
+        }}
+        onClearDraft={() => setDraftNewsPhoto(null)}
+        onClose={() => {
+          setIsNewspaperOpen(false);
+          setDraftNewsPhoto(null);
+        }}
       />
 
       {/* Pause Modal */}

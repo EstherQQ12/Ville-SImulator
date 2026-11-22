@@ -1,7 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Activity,
+  Camera,
   Check,
+  Cloud,
+  CloudFog,
   CloudLightning,
   CloudRain,
   Coins,
@@ -35,6 +38,7 @@ import {
   Volume2,
   VolumeX,
   Waves,
+  Wind,
   X,
 } from 'lucide-react';
 import {
@@ -105,6 +109,9 @@ function WeatherIcon({ weather }: { weather: WeatherType }) {
   if (weather === 'Rain') return <CloudRain className="w-3.5 h-3.5 text-sky-300" />;
   if (weather === 'Storm') return <CloudLightning className="w-3.5 h-3.5 text-amber-300" />;
   if (weather === 'Snow') return <Snowflake className="w-3.5 h-3.5 text-sky-100" />;
+  if (weather === 'Cloudy') return <Cloud className="w-3.5 h-3.5 text-slate-300" />;
+  if (weather === 'Foggy') return <CloudFog className="w-3.5 h-3.5 text-slate-200" />;
+  if (weather === 'Windy') return <Wind className="w-3.5 h-3.5 text-teal-300" />;
   return <Sun className="w-3.5 h-3.5 text-amber-300" />;
 }
 
@@ -303,7 +310,9 @@ export function HudOverlay({
             <div className="flex items-center gap-1.5 text-xs text-slate-300 whitespace-nowrap">
               <span className="font-semibold text-white">{mapName}</span>
               <span aria-hidden="true" className="text-slate-500">·</span>
-              <span className="tabular-nums">Day {stats.dayCount}</span>
+              <span className="tabular-nums font-medium text-amber-200">
+                {stats.dayOfWeek} · Day {stats.dayCount}
+              </span>
               <span aria-hidden="true" className="hidden sm:inline text-slate-500">·</span>
               <button
                 type="button"
@@ -416,7 +425,31 @@ export function HudOverlay({
               {stats.trafficFlowPercent}% {flowStatus.label}
             </span>
             <span aria-hidden="true" className="text-slate-600">·</span>
-            {stats.warActive ? (
+            {stats.tornadoActive ? (
+              <button
+                type="button"
+                onClick={onFocusCityHall}
+                className="text-slate-200 font-semibold underline decoration-slate-400/60"
+              >
+                Tornado Alert
+              </button>
+            ) : stats.earthquakeActive ? (
+              <button
+                type="button"
+                onClick={onFocusCityHall}
+                className="text-orange-300 font-semibold underline decoration-orange-400/60"
+              >
+                Earthquake
+              </button>
+            ) : stats.floodActive ? (
+              <button
+                type="button"
+                onClick={onFocusCityHall}
+                className="text-sky-300 font-semibold underline decoration-sky-400/60"
+              >
+                Flood Active
+              </button>
+            ) : stats.warActive ? (
               <button
                 type="button"
                 onClick={onFocusCityHall}
@@ -613,7 +646,34 @@ export function HudOverlay({
             </div>
             <div>
               <div className="text-[10px] text-slate-400">Safety</div>
-              {stats.warActive ? (
+              {stats.tornadoActive ? (
+                <button
+                  type="button"
+                  onClick={onFocusCityHall}
+                  title="Tornado sweeping through town"
+                  className="font-mono-tabular text-sm font-semibold text-slate-200 hover:text-white underline decoration-slate-400/60 cursor-pointer whitespace-nowrap"
+                >
+                  Tornado Alert
+                </button>
+              ) : stats.earthquakeActive ? (
+                <button
+                  type="button"
+                  onClick={onFocusCityHall}
+                  title="Earthquake shaking town"
+                  className="font-mono-tabular text-sm font-semibold text-orange-300 hover:text-orange-200 underline decoration-orange-400/60 cursor-pointer whitespace-nowrap"
+                >
+                  Earthquake
+                </button>
+              ) : stats.floodActive ? (
+                <button
+                  type="button"
+                  onClick={onFocusCityHall}
+                  title="City flood active"
+                  className="font-mono-tabular text-sm font-semibold text-sky-300 hover:text-sky-200 underline decoration-sky-400/60 cursor-pointer whitespace-nowrap"
+                >
+                  Flood Active
+                </button>
+              ) : stats.warActive ? (
                 <button
                   type="button"
                   onClick={onFocusCityHall}
@@ -883,6 +943,26 @@ export function HudOverlay({
             >
               <MousePointer2 className="w-4 h-4" />
               Select
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectTool('camera')}
+              title={
+                stats.hasTodayPhotoNews
+                  ? 'Daily news photo already taken today — check tomorrow!'
+                  : 'Take Daily News Photo (C) — Snap town scene & write news'
+              }
+              className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                toolMode === 'camera'
+                  ? 'bg-amber-400 text-slate-950 font-semibold'
+                  : stats.hasTodayPhotoNews
+                  ? 'text-slate-400 hover:bg-slate-800'
+                  : 'text-amber-300 hover:bg-slate-800'
+              }`}
+            >
+              <Camera className="w-4 h-4" />
+              <span>Photo</span>
+              {stats.hasTodayPhotoNews && <Check className="w-3 h-3 text-emerald-400" />}
             </button>
             <button
               type="button"

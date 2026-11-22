@@ -1,4 +1,5 @@
 import {
+  Activity,
   AlertTriangle,
   Biohazard,
   Bomb,
@@ -6,16 +7,22 @@ import {
   Droplets,
   Factory,
   Flame,
+  GraduationCap,
   Heart,
+  Home,
   Megaphone,
   Paintbrush,
   PartyPopper,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Sprout,
   Store,
   Swords,
   Trash2,
+  Trees,
+  Waves,
+  Wind,
   Wrench,
   X,
 } from 'lucide-react';
@@ -57,6 +64,7 @@ interface InspectorPanelProps {
   mayorAlive: boolean;
   electionActive: boolean;
   electionRemaining: number;
+  basementCount: number;
   chaosCooldowns: ChaosCooldowns;
   mayorSpeech: MayorSpeech | null;
   isIntersection: boolean;
@@ -105,6 +113,7 @@ export function InspectorPanel({
   mayorAlive,
   electionActive,
   electionRemaining,
+  basementCount,
   chaosCooldowns,
   mayorSpeech,
   isIntersection,
@@ -158,11 +167,61 @@ export function InspectorPanel({
           </button>
         </div>
 
-        <div className="flex items-center justify-between text-xs bg-slate-900/80 border border-slate-800 rounded-lg px-3 py-2 mb-3">
-          <span className="text-slate-400">Visits</span>
-          <span className="font-mono-tabular text-sm font-semibold text-amber-400">
-            {b.totalVisits}
-          </span>
+        <div className="space-y-2 mb-3">
+          <div className="flex items-center justify-between text-xs bg-slate-900/80 border border-slate-800 rounded-lg px-3 py-2">
+            <span className="text-slate-400">People Inside</span>
+            <span className="font-mono-tabular text-sm font-semibold text-amber-400">
+              {b.totalVisits}
+            </span>
+          </div>
+
+          {b.statusText && (
+            <div className="flex items-center justify-between text-xs bg-slate-900/80 border border-slate-800 rounded-lg px-3 py-1.5">
+              <span className="text-slate-400 flex items-center gap-1.5">
+                <GraduationCap className="w-3.5 h-3.5 text-sky-300" />
+                Status
+              </span>
+              <span className="font-semibold text-sky-200 truncate pl-2">{b.statusText}</span>
+            </div>
+          )}
+
+          {b.category === 'residential' && (
+            <div className="flex items-center justify-between text-xs bg-slate-900/80 border border-slate-800 rounded-lg px-3 py-1.5">
+              <span className="text-slate-400 flex items-center gap-1.5">
+                <Home className="w-3.5 h-3.5 text-amber-300" />
+                Residents
+              </span>
+              <span className="font-mono-tabular font-semibold text-white">
+                {b.residents ?? 0} / 5
+              </span>
+            </div>
+          )}
+
+          {b.category === 'park' && (
+            <div className="flex items-center justify-between text-xs bg-slate-900/80 border border-slate-800 rounded-lg px-3 py-1.5">
+              <span className="text-slate-400 flex items-center gap-1.5">
+                <Trees className="w-3.5 h-3.5 text-emerald-400" />
+                Park Style
+              </span>
+              <span className="font-semibold text-emerald-300 capitalize">
+                {b.parkVariant === 'field'
+                  ? 'Multipurpose Field'
+                  : b.parkVariant === 'garden'
+                  ? 'Flower Garden'
+                  : 'Playground'}
+              </span>
+            </div>
+          )}
+
+          {b.hasBasement && (
+            <div className="flex items-center justify-between text-xs bg-emerald-950/60 border border-emerald-700/70 rounded-lg px-3 py-1.5 text-emerald-200">
+              <span className="flex items-center gap-1.5 font-medium">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                Underground Basement
+              </span>
+              <span className="font-semibold text-emerald-300">Blast Safe</span>
+            </div>
+          )}
         </div>
 
         {b.category === 'city_hall' && (
@@ -242,8 +301,8 @@ export function InspectorPanel({
                   {totalLawsuits > 0 ? (
                     <span className="text-rose-400"> · {totalLawsuits} Sued</span>
                   ) : null}
-                  {crises.pollutionLevel > 0 ? (
-                    <span className="text-lime-300"> · Pol {Math.round(crises.pollutionLevel)}%</span>
+                  {basementCount > 0 ? (
+                    <span className="text-emerald-300"> · {basementCount} Bunkers</span>
                   ) : null}
                   {cratersCount > 0 ? (
                     <span className="text-orange-400"> · {cratersCount} Craters</span>
@@ -375,6 +434,84 @@ export function InspectorPanel({
                 </button>
                 <button
                   type="button"
+                  onClick={() => onTriggerCrisis('tornado')}
+                  disabled={!crises.tornadoActive && chaosCooldowns.tornado > 0}
+                  className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 font-mono-tabular ${
+                    crises.tornadoActive
+                      ? 'bg-slate-200 text-slate-950 hover:bg-white'
+                      : chaosCooldowns.tornado > 0
+                      ? 'bg-slate-800 text-slate-400 border border-slate-700 cursor-not-allowed'
+                      : 'bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700'
+                  }`}
+                  title={
+                    crises.tornadoActive
+                      ? 'Dissipate tornado'
+                      : chaosCooldowns.tornado > 0
+                      ? `Tornado recharging (${formatCooldown(chaosCooldowns.tornado)} cooldown)`
+                      : 'Spawn a roving Tornado across town (5m cooldown)'
+                  }
+                >
+                  <Wind className="w-3 h-3" />
+                  {crises.tornadoActive
+                    ? `Tornado ${Math.ceil(crises.tornadoRemaining)}s`
+                    : chaosCooldowns.tornado > 0
+                    ? `Twister ${formatCooldown(chaosCooldowns.tornado)}`
+                    : 'Tornado'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onTriggerCrisis('earthquake')}
+                  disabled={!crises.earthquakeActive && chaosCooldowns.earthquake > 0}
+                  className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 font-mono-tabular ${
+                    crises.earthquakeActive
+                      ? 'bg-amber-600 text-white hover:bg-amber-500'
+                      : chaosCooldowns.earthquake > 0
+                      ? 'bg-slate-800 text-slate-400 border border-slate-700 cursor-not-allowed'
+                      : 'bg-slate-800 text-orange-300 hover:bg-slate-700 border border-slate-700'
+                  }`}
+                  title={
+                    crises.earthquakeActive
+                      ? 'Stop earthquake tremors'
+                      : chaosCooldowns.earthquake > 0
+                      ? `Earthquake recharging (${formatCooldown(chaosCooldowns.earthquake)} cooldown)`
+                      : 'Trigger Earthquake shaking ground & bridges (5m cooldown)'
+                  }
+                >
+                  <Activity className="w-3 h-3" />
+                  {crises.earthquakeActive
+                    ? `Quake ${Math.ceil(crises.earthquakeRemaining)}s`
+                    : chaosCooldowns.earthquake > 0
+                    ? `Quake ${formatCooldown(chaosCooldowns.earthquake)}`
+                    : 'Earthquake'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onTriggerCrisis('flood')}
+                  disabled={!crises.floodActive && chaosCooldowns.flood > 0}
+                  className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 font-mono-tabular ${
+                    crises.floodActive
+                      ? 'bg-sky-500 text-slate-950 hover:bg-sky-400'
+                      : chaosCooldowns.flood > 0
+                      ? 'bg-slate-800 text-slate-400 border border-slate-700 cursor-not-allowed'
+                      : 'bg-slate-800 text-sky-300 hover:bg-slate-700 border border-slate-700'
+                  }`}
+                  title={
+                    crises.floodActive
+                      ? 'Drain floodwaters'
+                      : chaosCooldowns.flood > 0
+                      ? `Flood recharging (${formatCooldown(chaosCooldowns.flood)} cooldown)`
+                      : 'Flood rivers & streets (5m cooldown)'
+                  }
+                >
+                  <Waves className="w-3 h-3" />
+                  {crises.floodActive
+                    ? `Flood ${Math.ceil(crises.floodRemaining)}s`
+                    : chaosCooldowns.flood > 0
+                    ? `Flood ${formatCooldown(chaosCooldowns.flood)}`
+                    : 'Flood'}
+                </button>
+                <button
+                  type="button"
                   onClick={onTriggerNuke}
                   disabled={chaosCooldowns.nuke > 0}
                   className={`flex items-center justify-center gap-1 px-2 py-1.5 rounded text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 font-mono-tabular ${
@@ -385,7 +522,7 @@ export function InspectorPanel({
                   title={
                     chaosCooldowns.nuke > 0
                       ? `Nuke recharging (${formatCooldown(chaosCooldowns.nuke)} cooldown)`
-                      : 'Launch tactical nuke strike (destroys houses/stalls, 5m cooldown)'
+                      : 'Launch random nuke strike (basements shield buildings, 5m cooldown)'
                   }
                 >
                   <Bomb className="w-3 h-3" />
@@ -441,9 +578,20 @@ export function InspectorPanel({
           <div className="flex items-start gap-2 text-xs bg-slate-900/80 border border-slate-800 rounded-lg px-2.5 py-2 mb-3 text-slate-200">
             <Sprout className="w-4 h-4 text-lime-400 shrink-0 mt-0.5" />
             <div className="min-w-0">
-              <div className="font-semibold text-white">Crops &amp; Farm Plot</div>
+              <div className="font-semibold text-white">
+                Crops &amp; Farm Plot ·{' '}
+                <span className="text-lime-300">
+                  {(b.cropStage ?? 1) >= 3
+                    ? 'Ripe Harvest'
+                    : (b.cropStage ?? 1) === 2
+                    ? 'Growing'
+                    : (b.cropStage ?? 1) === 1
+                    ? 'Sprouting'
+                    : 'Freshly Seeded'}
+                </span>
+              </div>
               <div className="text-[11px] text-slate-400">
-                Produces fresh harvests, dispatches produce delivery vans, and boosts the city&apos;s food supply &amp; economy.
+                Farmers tend &amp; harvest ripe crops to feed citizens and boost the local economy.
               </div>
             </div>
           </div>

@@ -1,5 +1,10 @@
 export const GRID_COLS = 34;
 export const GRID_ROWS = 22;
+export const WORLD_COLS = 58;
+export const WORLD_ROWS = 46;
+export const CORE_OFFSET_X = 12;
+export const CORE_OFFSET_Y = 12;
+export const EXPANSION_CHUNK = 187; // quarter of default 34x22 (748) land every 10 days
 export const TILE_SIZE = 48;
 export const ICON_SIZE = 20;
 
@@ -14,7 +19,11 @@ export type ToolMode =
   | 'plot'
   | 'water'
   | 'forest'
-  | 'bulldoze';
+  | 'sand'
+  | 'jungle'
+  | 'land'
+  | 'bulldoze'
+  | 'camera';
 
 export type BuildingCategory =
   | 'road_path'
@@ -34,13 +43,15 @@ export type BuildingCategory =
   | 'crops'
   | 'park';
 
-export type TerrainType = 'grass' | 'water' | 'forest';
+export type TerrainType = 'grass' | 'sand' | 'water' | 'forest' | 'jungle';
 
 export type TimePhase = 'Dawn' | 'Day' | 'Dusk' | 'Night';
 
 export type SeasonType = 'Spring' | 'Summer' | 'Autumn' | 'Winter';
 
-export type WeatherType = 'Clear' | 'Rain' | 'Storm' | 'Snow';
+export type WeatherType = 'Sunny' | 'Cloudy' | 'Foggy' | 'Windy' | 'Rain' | 'Storm' | 'Snow';
+
+export type ParkVariant = 'playground' | 'garden' | 'field';
 
 export type HappinessMood = 'Thriving' | 'Content' | 'Strained' | 'Miserable';
 
@@ -66,7 +77,13 @@ export interface PlacedBuilding {
   capacity: number;
   activeTripsOut: number;
   activeTripsIn: number;
-  totalVisits: number;
+  totalVisits: number; // live count of people currently inside
+  parkVariant?: ParkVariant;
+  residents?: number; // 1..5 residents per residential house
+  hasBasement?: boolean;
+  cropStage?: number; // 0..3 growth stage for crops plots
+  cropTimer?: number;
+  statusText?: string;
 }
 
 export interface Neighbourhood {
@@ -144,7 +161,10 @@ export type PersonRole =
   | 'paperboy'
   | 'kayaker'
   | 'student'
-  | 'builder';
+  | 'builder'
+  | 'farmer'
+  | 'butcher'
+  | 'parent';
 
 export interface Person {
   id: string;
@@ -186,7 +206,9 @@ export interface Person {
     | 'delivering'
     | 'kayaking'
     | 'field_trip'
-    | 'building';
+    | 'building'
+    | 'farming'
+    | 'butchering';
   homeBuildingId?: string;
   destBuildingId?: string;
   destStallId?: string;
@@ -222,6 +244,24 @@ export interface Person {
   waterActivity?: 'kayak' | 'rowing' | 'swim';
   waterTileX?: number;
   waterTileY?: number;
+  targetAnimalId?: string;
+  holdTimer: number;
+}
+
+export type AnimalKind = 'bird' | 'cow' | 'pig' | 'chicken';
+
+export interface Animal {
+  id: string;
+  kind: AnimalKind;
+  wx: number;
+  wy: number;
+  vx: number;
+  vy: number;
+  targetWx: number;
+  targetWy: number;
+  homeBuildingId?: string;
+  state: 'roaming' | 'grazing' | 'flying';
+  animPhase: number;
   holdTimer: number;
 }
 
@@ -246,7 +286,7 @@ export interface MarketStall {
   maxAge: number;
 }
 
-export type CrisisType = 'virus' | 'war' | 'poverty' | 'pollution';
+export type CrisisType = 'virus' | 'war' | 'poverty' | 'pollution' | 'tornado' | 'earthquake' | 'flood';
 
 export interface ChaosCooldowns {
   virus: number;
@@ -255,6 +295,9 @@ export interface ChaosCooldowns {
   pollution: number;
   invade: number;
   nuke: number;
+  tornado: number;
+  earthquake: number;
+  flood: number;
 }
 
 export interface CityCrisisState {
@@ -267,6 +310,14 @@ export interface CityCrisisState {
   pollutionActive: boolean;
   pollutionRemaining: number;
   pollutionLevel: number; // 0..100
+  tornadoActive: boolean;
+  tornadoRemaining: number;
+  tornadoWx: number;
+  tornadoWy: number;
+  earthquakeActive: boolean;
+  earthquakeRemaining: number;
+  floodActive: boolean;
+  floodRemaining: number;
 }
 
 export interface BlastCrater {
@@ -500,10 +551,13 @@ export interface MapTile {
   x: number;
   y: number;
   terrain: TerrainType;
+  isUnlocked: boolean;
+  isDefaultLand: boolean;
   hasRoad: boolean;
   hasZebraCrossing?: boolean;
   hasFootbridge?: boolean;
   isBridgeBroken?: boolean;
+  isFlooded?: boolean;
   intersection: RoadIntersectionConfig;
   building: PlacedBuilding | null;
   congestionScore: number; // 0..1 smoothed local congestion
@@ -570,6 +624,7 @@ export interface Car {
   isReturningToStation?: boolean;
   returnStationId?: string;
   returnJailId?: string;
+  destLabel?: string;
 }
 
 export interface TrashItem {
@@ -593,15 +648,24 @@ export interface PorchPaperProp {
   maxAge?: number;
 }
 
+export interface NewspaperComment {
+  author: string;
+  text: string;
+}
+
 export interface NewspaperEdition {
   id: string;
   day: number;
+  dayOfWeek?: string;
   season: SeasonType;
   weather: WeatherType;
   headline: string;
   summary: string;
   highlights: string[];
   publishedAtTime: string;
+  photoDataUrl?: string;
+  isUserAuthored?: boolean;
+  readerComments?: NewspaperComment[];
 }
 
 export interface HonkRipple {
@@ -665,6 +729,17 @@ export interface SimulationStats {
   season: SeasonType;
   weather: WeatherType;
   chaosCooldowns: ChaosCooldowns;
+  dayOfWeek: string;
+  isWeekend: boolean;
+  hasTodayPhotoNews: boolean;
+  basementCount: number;
+  animalsCount: number;
+  tornadoActive: boolean;
+  earthquakeActive: boolean;
+  floodActive: boolean;
+  landExpansionCredits: number;
+  unlockedLandCount: number;
+  nextExpansionDay: number;
 }
 
 export interface SavedMapData {
@@ -672,10 +747,17 @@ export interface SavedMapData {
   name: string;
   subtitle: string;
   updatedAt: number;
+  version?: number;
+  worldCols?: number;
+  worldRows?: number;
+  landExpansionCredits?: number;
+  expansionMilestonesGranted?: number;
   tiles: {
     x: number;
     y: number;
     terrain: TerrainType;
+    isUnlocked?: boolean;
+    isDefaultLand?: boolean;
     hasRoad: boolean;
     hasZebraCrossing?: boolean;
     hasFootbridge?: boolean;

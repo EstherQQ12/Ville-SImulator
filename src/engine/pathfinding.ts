@@ -1,4 +1,4 @@
-import { GRID_COLS, GRID_ROWS, GridPoint, MapTile } from '../types/game';
+import { GridPoint, MapTile, WORLD_COLS, WORLD_ROWS } from '../types/game';
 
 const DIRS: GridPoint[] = [
   { x: 0, y: -1 },
@@ -8,7 +8,7 @@ const DIRS: GridPoint[] = [
 ];
 
 export function inBounds(x: number, y: number): boolean {
-  return x >= 0 && x < GRID_COLS && y >= 0 && y < GRID_ROWS;
+  return x >= 0 && x < WORLD_COLS && y >= 0 && y < WORLD_ROWS;
 }
 
 export function getRoadNeighbors(tiles: MapTile[], x: number, y: number): GridPoint[] {
@@ -16,8 +16,11 @@ export function getRoadNeighbors(tiles: MapTile[], x: number, y: number): GridPo
   for (const d of DIRS) {
     const nx = x + d.x;
     const ny = y + d.y;
-    if (inBounds(nx, ny) && tiles[ny * GRID_COLS + nx].hasRoad) {
-      res.push({ x: nx, y: ny });
+    if (inBounds(nx, ny)) {
+      const nt = tiles[ny * WORLD_COLS + nx];
+      if (nt && nt.isUnlocked && nt.hasRoad) {
+        res.push({ x: nx, y: ny });
+      }
     }
   }
   return res;
@@ -26,16 +29,18 @@ export function getRoadNeighbors(tiles: MapTile[], x: number, y: number): GridPo
 export function getRoadMask(tiles: MapTile[], x: number, y: number): number {
   // Bitmask: N=1, E=2, S=4, W=8
   let mask = 0;
-  if (inBounds(x, y - 1) && tiles[(y - 1) * GRID_COLS + x].hasRoad) mask |= 1;
-  if (inBounds(x + 1, y) && tiles[y * GRID_COLS + (x + 1)].hasRoad) mask |= 2;
-  if (inBounds(x, y + 1) && tiles[(y + 1) * GRID_COLS + x].hasRoad) mask |= 4;
-  if (inBounds(x - 1, y) && tiles[y * GRID_COLS + (x - 1)].hasRoad) mask |= 8;
+  const has = (tx: number, ty: number) =>
+    inBounds(tx, ty) && tiles[ty * WORLD_COLS + tx]?.isUnlocked && tiles[ty * WORLD_COLS + tx]?.hasRoad;
+  if (has(x, y - 1)) mask |= 1;
+  if (has(x + 1, y)) mask |= 2;
+  if (has(x, y + 1)) mask |= 4;
+  if (has(x - 1, y)) mask |= 8;
   return mask;
 }
 
 export function getEffectiveRoadMask(tiles: MapTile[], x: number, y: number): number {
   const has = (tx: number, ty: number) =>
-    inBounds(tx, ty) && tiles[ty * GRID_COLS + tx].hasRoad;
+    inBounds(tx, ty) && tiles[ty * WORLD_COLS + tx]?.isUnlocked && tiles[ty * WORLD_COLS + tx]?.hasRoad;
   if (!has(x, y)) return 0;
 
   let mask = 0;
@@ -78,76 +83,19 @@ export function getEffectiveRoadMask(tiles: MapTile[], x: number, y: number): nu
   return mask;
 }
 
-export function isHighwayTile(tiles: MapTile[], x: number, y: number): boolean {
-  const has = (tx: number, ty: number) =>
-    inBounds(tx, ty) && tiles[ty * GRID_COLS + tx].hasRoad;
-  if (!has(x, y)) return false;
-  // Two adjacent roads ONLY merge into a wider highway plaza when they form a turn/junction
-  // (i.e., the 2x2 road block has road continuations exiting on BOTH N/S and E/W outer axes).
-  const quads = [
-    [-1, -1],
-    [1, -1],
-    [-1, 1],
-    [1, 1],
-  ];
-  for (const [dx, dy] of quads) {
-    if (has(x + dx, y) && has(x, y + dy) && has(x + dx, y + dy)) {
-      const qx0 = Math.min(x, x + dx);
-      const qy0 = Math.min(y, y + dy);
-      const outerNS =
-        has(qx0, qy0 - 1) ||
-        has(qx0 + 1, qy0 - 1) ||
-        has(qx0, qy0 + 2) ||
-        has(qx0 + 1, qy0 + 2);
-      const outerEW =
-        has(qx0 - 1, qy0) ||
-        has(qx0 - 1, qy0 + 1) ||
-        has(qx0 + 2, qy0) ||
-        has(qx0 + 2, qy0 + 1);
-      if (outerNS && outerEW) {
-        return true;
-      }
-    }
-  }
+export function isHighwayTile(_tiles: MapTile[], _x: number, _y: number): boolean {
+  // Parallel side-by-side roads remain separate 2-lane roads and never merge into wide highway slabs.
   return false;
 }
 
 export function isIntersectionTile(tiles: MapTile[], x: number, y: number): boolean {
-  const tile = tiles[y * GRID_COLS + x];
-  if (!tile || !tile.hasRoad) return false;
-  const neighbors = getRoadNeighbors(tiles, x, y);
-  if (neighbors.length < 3) return false;
-
-  if (!isHighwayTile(tiles, x, y)) {
-    return true;
-  }
-
-  // On a straight 2-lane highway, each tile naturally has 3 neighbors (two in-lane + one parallel lane).
-  // Only mark as a controlled intersection if a non-highway side road joins, or if it's a 4-way crossing
-  // extending across BOTH axes beyond a 2-tile highway width.
-  const nHw = isHighwayTile(tiles, x, y - 1);
-  const sHw = isHighwayTile(tiles, x, y + 1);
-  const wHw = isHighwayTile(tiles, x - 1, y);
-  const eHw = isHighwayTile(tiles, x + 1, y);
-
-  const has = (tx: number, ty: number) =>
-    inBounds(tx, ty) && tiles[ty * GRID_COLS + tx].hasRoad;
-  const n = has(x, y - 1);
-  const s = has(x, y + 1);
-  const w = has(x - 1, y);
-  const e = has(x + 1, y);
-
-  if ((n && !nHw) || (s && !sHw) || (w && !wHw) || (e && !eHw)) {
-    return true;
-  }
-
-  if (n && s && w && e) {
-    const extNS = has(x, y - 2) && has(x, y + 2);
-    const extEW = has(x - 2, y) && has(x + 2, y);
-    if (extNS && extEW) return true;
-  }
-
-  return false;
+  if (!inBounds(x, y)) return false;
+  const tile = tiles[y * WORLD_COLS + x];
+  if (!tile || !tile.isUnlocked || !tile.hasRoad) return false;
+  const mask = getEffectiveRoadMask(tiles, x, y);
+  const arms =
+    ((mask & 1) ? 1 : 0) + ((mask & 2) ? 1 : 0) + ((mask & 4) ? 1 : 0) + ((mask & 8) ? 1 : 0);
+  return arms >= 3;
 }
 
 export function findAdjacentRoadTile(tiles: MapTile[], bx: number, by: number): GridPoint | null {
@@ -163,23 +111,23 @@ export function findRoadPath(
   congestionWeight = 1.4
 ): GridPoint[] | null {
   if (!inBounds(start.x, start.y) || !inBounds(goal.x, goal.y)) return null;
-  const startTile = tiles[start.y * GRID_COLS + start.x];
-  const goalTile = tiles[goal.y * GRID_COLS + goal.x];
-  if (!startTile.hasRoad || !goalTile.hasRoad) return null;
+  const startTile = tiles[start.y * WORLD_COLS + start.x];
+  const goalTile = tiles[goal.y * WORLD_COLS + goal.x];
+  if (!startTile?.isUnlocked || !goalTile?.isUnlocked || !startTile.hasRoad || !goalTile.hasRoad) return null;
 
   if (start.x === goal.x && start.y === goal.y) {
     return [start];
   }
 
-  const total = GRID_COLS * GRID_ROWS;
+  const total = WORLD_COLS * WORLD_ROWS;
   const gScore = new Float32Array(total).fill(Infinity);
   const fScore = new Float32Array(total).fill(Infinity);
   const cameFrom = new Int32Array(total).fill(-1);
   const closed = new Uint8Array(total);
   const inOpen = new Uint8Array(total);
 
-  const startIdx = start.y * GRID_COLS + start.x;
-  const goalIdx = goal.y * GRID_COLS + goal.x;
+  const startIdx = start.y * WORLD_COLS + start.x;
+  const goalIdx = goal.y * WORLD_COLS + goal.x;
 
   gScore[startIdx] = 0;
   fScore[startIdx] = Math.abs(goal.x - start.x) + Math.abs(goal.y - start.y);
@@ -206,8 +154,8 @@ export function findRoadPath(
       let curr = current;
       while (curr !== -1) {
         path.push({
-          x: curr % GRID_COLS,
-          y: Math.floor(curr / GRID_COLS),
+          x: curr % WORLD_COLS,
+          y: Math.floor(curr / WORLD_COLS),
         });
         curr = cameFrom[curr];
       }
@@ -219,20 +167,20 @@ export function findRoadPath(
     inOpen[current] = 0;
     closed[current] = 1;
 
-    const cx = current % GRID_COLS;
-    const cy = Math.floor(current / GRID_COLS);
+    const cx = current % WORLD_COLS;
+    const cy = Math.floor(current / WORLD_COLS);
     const prevIdx = cameFrom[current];
-    const px = prevIdx !== -1 ? prevIdx % GRID_COLS : cx;
-    const py = prevIdx !== -1 ? Math.floor(prevIdx / GRID_COLS) : cy;
+    const px = prevIdx !== -1 ? prevIdx % WORLD_COLS : cx;
+    const py = prevIdx !== -1 ? Math.floor(prevIdx / WORLD_COLS) : cy;
 
     for (const d of DIRS) {
       const nx = cx + d.x;
       const ny = cy + d.y;
       if (!inBounds(nx, ny)) continue;
-      const nIdx = ny * GRID_COLS + nx;
+      const nIdx = ny * WORLD_COLS + nx;
       if (closed[nIdx]) continue;
       const nTile = tiles[nIdx];
-      if (!nTile.hasRoad || nTile.isBridgeBroken) continue;
+      if (!nTile.isUnlocked || !nTile.hasRoad || nTile.isBridgeBroken) continue;
 
       // Slight turn penalty so cars prefer straight avenues, plus congestion cost & highway bonus
       let turnPenalty = 0;
@@ -268,6 +216,7 @@ export function isPedestrianTileWalkable(
   allowFrozenWater = false,
   allowAllTerrain = false
 ): boolean {
+  if (!tile.isUnlocked) return false;
   if (allowAllTerrain) return true;
   if (tile.isBridgeBroken) return false;
   if (tile.hasRoad) {
@@ -287,7 +236,7 @@ export function findNearestWalkableTile(
   maxRadius = 3,
   allowFrozenWater = false
 ): GridPoint | null {
-  // Pass 1: prefer open gaps (grass/forest/park/crossings) without solid buildings
+  // Pass 1: prefer open gaps (grass/sand/forest/jungle/park/crossings) without solid buildings
   for (let r = 0; r <= maxRadius; r++) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
@@ -295,7 +244,7 @@ export function findNearestWalkableTile(
         const nx = originX + dx;
         const ny = originY + dy;
         if (!inBounds(nx, ny)) continue;
-        const t = tiles[ny * GRID_COLS + nx];
+        const t = tiles[ny * WORLD_COLS + nx];
         if (
           isPedestrianTileWalkable(t, allowFrozenWater) &&
           (!t.building || t.building.category === 'park' || t.building.category === 'road_path')
@@ -313,7 +262,7 @@ export function findNearestWalkableTile(
         const nx = originX + dx;
         const ny = originY + dy;
         if (!inBounds(nx, ny)) continue;
-        const t = tiles[ny * GRID_COLS + nx];
+        const t = tiles[ny * WORLD_COLS + nx];
         if (isPedestrianTileWalkable(t, allowFrozenWater)) {
           return { x: nx, y: ny };
         }
@@ -336,22 +285,24 @@ export function findPedestrianPath(
   allowAllTerrain = false
 ): GridPoint[] | null {
   if (!inBounds(start.x, start.y) || !inBounds(goal.x, goal.y)) return null;
-  const goalTile = tiles[goal.y * GRID_COLS + goal.x];
+  const startTile = tiles[start.y * WORLD_COLS + start.x];
+  const goalTile = tiles[goal.y * WORLD_COLS + goal.x];
+  if (!startTile?.isUnlocked || !goalTile?.isUnlocked) return null;
   if (!isPedestrianTileWalkable(goalTile, allowFrozenWater, allowAllTerrain)) return null;
 
   if (start.x === goal.x && start.y === goal.y) {
     return [start];
   }
 
-  const total = GRID_COLS * GRID_ROWS;
+  const total = WORLD_COLS * WORLD_ROWS;
   const gScore = new Float32Array(total).fill(Infinity);
   const fScore = new Float32Array(total).fill(Infinity);
   const cameFrom = new Int32Array(total).fill(-1);
   const closed = new Uint8Array(total);
   const inOpen = new Uint8Array(total);
 
-  const startIdx = start.y * GRID_COLS + start.x;
-  const goalIdx = goal.y * GRID_COLS + goal.x;
+  const startIdx = start.y * WORLD_COLS + start.x;
+  const goalIdx = goal.y * WORLD_COLS + goal.x;
 
   gScore[startIdx] = 0;
   fScore[startIdx] = Math.abs(goal.x - start.x) + Math.abs(goal.y - start.y);
@@ -377,8 +328,8 @@ export function findPedestrianPath(
       let curr = current;
       while (curr !== -1) {
         path.push({
-          x: curr % GRID_COLS,
-          y: Math.floor(curr / GRID_COLS),
+          x: curr % WORLD_COLS,
+          y: Math.floor(curr / WORLD_COLS),
         });
         curr = cameFrom[curr];
       }
@@ -390,18 +341,18 @@ export function findPedestrianPath(
     inOpen[current] = 0;
     closed[current] = 1;
 
-    const cx = current % GRID_COLS;
-    const cy = Math.floor(current / GRID_COLS);
+    const cx = current % WORLD_COLS;
+    const cy = Math.floor(current / WORLD_COLS);
 
     for (const d of DIRS) {
       const nx = cx + d.x;
       const ny = cy + d.y;
       if (!inBounds(nx, ny)) continue;
-      const nIdx = ny * GRID_COLS + nx;
+      const nIdx = ny * WORLD_COLS + nx;
       if (closed[nIdx]) continue;
 
       const nTile = tiles[nIdx];
-      if (!isPedestrianTileWalkable(nTile, allowFrozenWater, allowAllTerrain)) continue;
+      if (!nTile.isUnlocked || !isPedestrianTileWalkable(nTile, allowFrozenWater, allowAllTerrain)) continue;
 
       // Strictly forbid walking on top of intermediate buildings: route through gaps, parks, crossings & open ground
       if (
