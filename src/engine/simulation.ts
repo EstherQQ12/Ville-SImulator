@@ -135,15 +135,12 @@ export class CitySimulation {
   public snowmen: SnowmanProp[] = [];
   public brokenBridges: BrokenBridgeIncident[] = [];
   public trashItems: TrashItem[] = [];
-  public porchPapers: PorchPaperProp[] = [];
   public animals: Animal[] = [];
   public newspapers: NewspaperEdition[] = [];
   public unreadNewsCount = 0;
   public dailyHighlights: string[] = [];
   public hasNukeOccurred = false;
   public earthquakeShakeIntensity = 0;
-  public landExpansionCredits = 0;
-  public expansionMilestonesGranted = 0;
   public crises: CityCrisisState = {
     virusActive: false,
     virusRemaining: 0,
@@ -156,8 +153,8 @@ export class CitySimulation {
     pollutionLevel: 0,
     tornadoActive: false,
     tornadoRemaining: 0,
-    tornadoWx: (WORLD_COLS * TILE_SIZE) / 2,
-    tornadoWy: (WORLD_ROWS * TILE_SIZE) / 2,
+    tornadoWx: (GRID_COLS * TILE_SIZE) / 2,
+    tornadoWy: (GRID_ROWS * TILE_SIZE) / 2,
     earthquakeActive: false,
     earthquakeRemaining: 0,
     floodActive: false,
@@ -258,9 +255,6 @@ export class CitySimulation {
   private animalSpawnAccumulator = 4;
   private farmerButcherAccumulator = 6;
   private basementSpreadAccumulator = 0;
-  private parkVisitorAccumulator = 2;
-  private lastMorningPaperDay = 0;
-  private paperIdCounter = 1;
   private tornadoVx = 28;
   private tornadoVy = 18;
   private lastSchoolBellKey = '';
@@ -324,7 +318,6 @@ export class CitySimulation {
     this.snowmen = [];
     this.brokenBridges = [];
     this.trashItems = [];
-    this.porchPapers = [];
     this.animals = [];
     this.newspapers = [];
     this.unreadNewsCount = 0;
@@ -332,9 +325,6 @@ export class CitySimulation {
     this.hasNukeOccurred = false;
     this.earthquakeShakeIntensity = 0;
     this.lastSchoolBellKey = '';
-    this.lastMorningPaperDay = 0;
-    this.landExpansionCredits = data.landExpansionCredits ?? 0;
-    this.expansionMilestonesGranted = data.expansionMilestonesGranted ?? 0;
     this.crises = {
       virusActive: false,
       virusRemaining: 0,
@@ -347,8 +337,8 @@ export class CitySimulation {
       pollutionLevel: 0,
       tornadoActive: false,
       tornadoRemaining: 0,
-      tornadoWx: (WORLD_COLS * TILE_SIZE) / 2,
-      tornadoWy: (WORLD_ROWS * TILE_SIZE) / 2,
+      tornadoWx: (GRID_COLS * TILE_SIZE) / 2,
+      tornadoWy: (GRID_ROWS * TILE_SIZE) / 2,
       earthquakeActive: false,
       earthquakeRemaining: 0,
       floodActive: false,
@@ -434,19 +424,12 @@ export class CitySimulation {
     };
 
     this.tiles = [];
-    for (let y = 0; y < WORLD_ROWS; y++) {
-      for (let x = 0; x < WORLD_COLS; x++) {
-        const isCore =
-          x >= CORE_OFFSET_X &&
-          x < CORE_OFFSET_X + GRID_COLS &&
-          y >= CORE_OFFSET_Y &&
-          y < CORE_OFFSET_Y + GRID_ROWS;
+    for (let y = 0; y < GRID_ROWS; y++) {
+      for (let x = 0; x < GRID_COLS; x++) {
         this.tiles.push({
           x,
           y,
           terrain: 'grass',
-          isUnlocked: isCore,
-          isDefaultLand: isCore,
           hasRoad: false,
           hasZebraCrossing: false,
           hasFootbridge: false,
@@ -460,32 +443,16 @@ export class CitySimulation {
       }
     }
 
-    const isWorldV2 =
-      data.version === 2 ||
-      data.worldCols === WORLD_COLS ||
-      data.tiles.some((t) => t.x >= GRID_COLS || t.y >= GRID_ROWS || t.isUnlocked !== undefined);
-    const offsetX = isWorldV2 ? 0 : CORE_OFFSET_X;
-    const offsetY = isWorldV2 ? 0 : CORE_OFFSET_Y;
-
     let hasLoadedCityHall = false;
     for (const savedTile of data.tiles) {
-      const gx = savedTile.x + offsetX;
-      const gy = savedTile.y + offsetY;
-      if (!inBounds(gx, gy)) continue;
-      const idx = gy * WORLD_COLS + gx;
-      const targetTile = this.tiles[idx];
-      targetTile.terrain = savedTile.terrain;
-      if (savedTile.isUnlocked !== undefined) {
-        targetTile.isUnlocked = savedTile.isUnlocked;
-      }
-      if (savedTile.isDefaultLand !== undefined) {
-        targetTile.isDefaultLand = savedTile.isDefaultLand;
-      }
-      targetTile.hasRoad = savedTile.hasRoad;
-      targetTile.hasZebraCrossing = Boolean(savedTile.hasZebraCrossing);
-      targetTile.hasFootbridge = Boolean(savedTile.hasFootbridge);
+      if (!inBounds(savedTile.x, savedTile.y)) continue;
+      const idx = savedTile.y * GRID_COLS + savedTile.x;
+      this.tiles[idx].terrain = savedTile.terrain;
+      this.tiles[idx].hasRoad = savedTile.hasRoad;
+      this.tiles[idx].hasZebraCrossing = Boolean(savedTile.hasZebraCrossing);
+      this.tiles[idx].hasFootbridge = Boolean(savedTile.hasFootbridge);
       if (savedTile.intersection) {
-        targetTile.intersection = { ...savedTile.intersection };
+        this.tiles[idx].intersection = { ...savedTile.intersection };
       }
       if (savedTile.building) {
         if (savedTile.building.category === 'city_hall') {
@@ -494,14 +461,12 @@ export class CitySimulation {
         }
         const bld: PlacedBuilding = {
           ...savedTile.building,
-          x: gx,
-          y: gy,
           iconGrid: [...savedTile.building.iconGrid],
           activeTripsOut: 0,
           activeTripsIn: 0,
         };
         this.initializeBuildingProps(bld);
-        targetTile.building = bld;
+        this.tiles[idx].building = bld;
       }
     }
 
@@ -512,10 +477,6 @@ export class CitySimulation {
   }
 
   private initializeBuildingProps(bld: PlacedBuilding) {
-    const bpMatch = DEFAULT_BLUEPRINTS.find((bp) => bp.id === bld.blueprintId);
-    if (bpMatch && bld.category !== 'residential') {
-      bld.capacity = bpMatch.capacity;
-    }
     if (bld.category === 'park' && !bld.parkVariant) {
       const variants: ParkVariant[] = ['playground', 'garden', 'field'];
       bld.parkVariant = variants[Math.floor(Math.random() * variants.length)];
@@ -524,11 +485,9 @@ export class CitySimulation {
       if (bld.residents === undefined || bld.residents < 1 || bld.residents > 5) {
         bld.residents = Math.max(1, Math.min(5, Math.min(bld.capacity || 4, 2 + Math.floor(Math.random() * 4))));
       }
-      bld.capacity = 5;
       if (!bld.totalVisits) {
         bld.totalVisits = bld.residents;
       }
-      bld.totalVisits = Math.min(bld.capacity, bld.totalVisits);
     }
     if (bld.category === 'crops') {
       if (bld.cropStage === undefined) bld.cropStage = 1 + Math.floor(Math.random() * 2);
@@ -542,25 +501,16 @@ export class CitySimulation {
       name: name || this.mapName,
       subtitle: subtitle || `${this.buildingsList.length} plots · ${this.roadTilesCount} road tiles`,
       updatedAt: Date.now(),
-      version: 2,
-      worldCols: WORLD_COLS,
-      worldRows: WORLD_ROWS,
-      landExpansionCredits: this.landExpansionCredits,
-      expansionMilestonesGranted: this.expansionMilestonesGranted,
-      tiles: this.tiles
-        .filter((t) => t.isUnlocked)
-        .map((t) => ({
-          x: t.x,
-          y: t.y,
-          terrain: t.terrain,
-          isUnlocked: t.isUnlocked,
-          isDefaultLand: t.isDefaultLand,
-          hasRoad: t.hasRoad,
-          hasZebraCrossing: t.hasZebraCrossing || undefined,
-          hasFootbridge: t.hasFootbridge || undefined,
-          intersection: t.hasRoad ? { ...t.intersection } : undefined,
-          building: t.building ? { ...t.building, iconGrid: [...t.building.iconGrid] } : null,
-        })),
+      tiles: this.tiles.map((t) => ({
+        x: t.x,
+        y: t.y,
+        terrain: t.terrain,
+        hasRoad: t.hasRoad,
+        hasZebraCrossing: t.hasZebraCrossing || undefined,
+        hasFootbridge: t.hasFootbridge || undefined,
+        intersection: t.hasRoad ? { ...t.intersection } : undefined,
+        building: t.building ? { ...t.building, iconGrid: [...t.building.iconGrid] } : null,
+      })),
       customBlueprints: this.customBlueprints.map((bp) => ({ ...bp, iconGrid: [...bp.iconGrid] })),
     };
   }
@@ -712,144 +662,7 @@ export class CitySimulation {
 
   public getTile(x: number, y: number): MapTile | null {
     if (!inBounds(x, y)) return null;
-    return this.tiles[y * WORLD_COLS + x];
-  }
-
-  private adjustBuildingVisits(bld: PlacedBuilding | undefined | null, delta: number) {
-    if (!bld) return;
-    const cap = bld.category === 'residential' ? 5 : Math.max(1, bld.capacity || 20);
-    bld.totalVisits = Math.max(0, Math.min(cap, bld.totalVisits + delta));
-  }
-
-  public getUnlockedBounds(): {
-    minX: number;
-    maxX: number;
-    minY: number;
-    maxY: number;
-    width: number;
-    height: number;
-    count: number;
-  } {
-    let minX = WORLD_COLS - 1;
-    let maxX = 0;
-    let minY = WORLD_ROWS - 1;
-    let maxY = 0;
-    let count = 0;
-    for (const t of this.tiles) {
-      if (!t.isUnlocked) continue;
-      count++;
-      if (t.x < minX) minX = t.x;
-      if (t.x > maxX) maxX = t.x;
-      if (t.y < minY) minY = t.y;
-      if (t.y > maxY) maxY = t.y;
-    }
-    if (count === 0) {
-      return {
-        minX: CORE_OFFSET_X,
-        maxX: CORE_OFFSET_X + GRID_COLS - 1,
-        minY: CORE_OFFSET_Y,
-        maxY: CORE_OFFSET_Y + GRID_ROWS - 1,
-        width: GRID_COLS,
-        height: GRID_ROWS,
-        count: 0,
-      };
-    }
-    return {
-      minX,
-      maxX,
-      minY,
-      maxY,
-      width: maxX - minX + 1,
-      height: maxY - minY + 1,
-      count,
-    };
-  }
-
-  public canPlaceExpansionLand(x: number, y: number): boolean {
-    if (this.landExpansionCredits <= 0) return false;
-    const tile = this.getTile(x, y);
-    if (!tile || tile.isUnlocked) return false;
-    const dirs = [
-      { dx: 1, dy: 0 },
-      { dx: -1, dy: 0 },
-      { dx: 0, dy: 1 },
-      { dx: 0, dy: -1 },
-    ];
-    return dirs.some((d) => Boolean(this.getTile(x + d.dx, y + d.dy)?.isUnlocked));
-  }
-
-  public placeExpansionLand(x: number, y: number): boolean {
-    if (!this.canPlaceExpansionLand(x, y)) return false;
-    const tile = this.getTile(x, y);
-    if (!tile) return false;
-    tile.isUnlocked = true;
-    tile.isDefaultLand = false;
-    tile.terrain = 'grass';
-    tile.hasRoad = false;
-    tile.hasZebraCrossing = false;
-    tile.hasFootbridge = false;
-    tile.building = null;
-    this.landExpansionCredits = Math.max(0, this.landExpansionCredits - 1);
-    this.rebuildCaches();
-    return true;
-  }
-
-  public removeExpansionLand(x: number, y: number): boolean {
-    const tile = this.getTile(x, y);
-    if (!tile || !tile.isUnlocked || tile.isDefaultLand) return false;
-    this.bulldozeTile(x, y);
-    tile.isUnlocked = false;
-    tile.terrain = 'grass';
-    tile.hasRoad = false;
-    tile.hasZebraCrossing = false;
-    tile.hasFootbridge = false;
-    tile.isFlooded = false;
-    tile.isBridgeBroken = false;
-    tile.building = null;
-    this.landExpansionCredits += 1;
-    this.rebuildCaches();
-    return true;
-  }
-
-  private checkLandExpansionMilestone() {
-    const targetMilestones = Math.floor(this.dayCount / 10);
-    if (targetMilestones > this.expansionMilestonesGranted) {
-      const gainedChunks = targetMilestones - this.expansionMilestonesGranted;
-      this.expansionMilestonesGranted = targetMilestones;
-      const gainedTiles = gainedChunks * EXPANSION_CHUNK;
-      this.landExpansionCredits += gainedTiles;
-      const bounds = this.getUnlockedBounds();
-      const hall = this.buildingsList.find((b) => b.category === 'city_hall');
-      const anchorWx = hall ? (hall.x + 0.5) * TILE_SIZE : ((bounds.minX + bounds.maxX + 1) * 0.5) * TILE_SIZE;
-      const anchorWy = hall ? (hall.y + 0.25) * TILE_SIZE : ((bounds.minY + bounds.maxY + 1) * 0.5) * TILE_SIZE;
-      this.floatingLabels.push({
-        wx: anchorWx,
-        wy: anchorWy,
-        text: `+${gainedTiles} New Land Tiles!`,
-        color: '#ECFDF5',
-        bgColor: '#047857',
-        age: 0,
-        maxAge: 3.4,
-      });
-      this.logDailyNews(
-        `DAY ${this.dayCount} LAND GRANT: City surveyors unlocked +${gainedTiles} expandable frontier tiles! Open the Land tool to place new territory wherever you want.`
-      );
-      soundEngine.playCelebrationBell();
-    }
-  }
-
-  private countAdjacentTrees(x: number, y: number): number {
-    let trees = 0;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0) continue;
-        const nt = this.getTile(x + dx, y + dy);
-        if (nt && nt.isUnlocked && (nt.terrain === 'forest' || nt.terrain === 'jungle')) {
-          trees++;
-        }
-      }
-    }
-    return trees;
+    return this.tiles[y * GRID_COLS + x];
   }
 
   private removeStallOnTile(x: number, y: number): boolean {
@@ -885,15 +698,15 @@ export class CitySimulation {
 
   public setTerrain(x: number, y: number, terrain: TerrainType): boolean {
     const tile = this.getTile(x, y);
-    if (!tile || !tile.isUnlocked) return false;
+    if (!tile) return false;
     if (tile.terrain === terrain) return false;
     if (terrain !== 'water') {
       tile.hasFootbridge = false;
       this.resolveBrokenBridgeAt(x, y);
     }
-    if (terrain === 'water' || terrain === 'forest' || terrain === 'jungle') {
+    if (terrain === 'water' || terrain === 'forest') {
       if (tile.building) tile.building = null;
-      if (terrain === 'forest' || terrain === 'jungle') tile.hasRoad = false;
+      if (terrain === 'forest') tile.hasRoad = false;
       this.removeStallOnTile(x, y);
     }
     tile.terrain = terrain;
@@ -903,10 +716,10 @@ export class CitySimulation {
 
   public paveRoad(x: number, y: number): boolean {
     const tile = this.getTile(x, y);
-    if (!tile || !tile.isUnlocked) return false;
+    if (!tile) return false;
     if (tile.hasRoad) return false;
     if (tile.building) return false;
-    if (tile.terrain === 'forest' || tile.terrain === 'jungle') tile.terrain = 'grass';
+    if (tile.terrain === 'forest') tile.terrain = 'grass';
     tile.hasFootbridge = false;
     this.resolveBrokenBridgeAt(x, y);
     tile.hasRoad = true;
@@ -922,7 +735,7 @@ export class CitySimulation {
 
   public setFootbridge(x: number, y: number, enabled?: boolean): boolean {
     const tile = this.getTile(x, y);
-    if (!tile || !tile.isUnlocked || tile.terrain !== 'water' || tile.hasRoad || tile.building) return false;
+    if (!tile || tile.terrain !== 'water' || tile.hasRoad || tile.building) return false;
     const next = enabled !== undefined ? enabled : !tile.hasFootbridge;
     if (Boolean(tile.hasFootbridge) === next) return false;
     tile.hasFootbridge = next;
@@ -936,7 +749,7 @@ export class CitySimulation {
 
   public placeBuilding(x: number, y: number, blueprint: BuildingBlueprint): PlacedBuilding | null {
     const tile = this.getTile(x, y);
-    if (!tile || !tile.isUnlocked) return null;
+    if (!tile) return null;
     if (blueprint.category === 'city_hall' && this.hasCityHall()) {
       return null;
     }
@@ -944,9 +757,7 @@ export class CitySimulation {
     if (tile.terrain === 'water') return null;
     if (tile.hasRoad && !isRoadPath) return null;
 
-    if (tile.terrain === 'forest' || tile.terrain === 'jungle') {
-      tile.terrain = 'grass';
-    }
+    tile.terrain = 'grass';
     tile.hasFootbridge = false;
     this.removeStallOnTile(x, y);
     if (isRoadPath) {
@@ -1179,7 +990,6 @@ export class CitySimulation {
       if ((this.dayCount - 1) % 10 === 0) {
         this.cycleSeason(false);
       }
-      this.checkLandExpansionMilestone();
     }
   }
 
@@ -1205,7 +1015,6 @@ export class CitySimulation {
       if ((this.dayCount - 1) % 10 === 0) {
         this.cycleSeason(false);
       }
-      this.checkLandExpansionMilestone();
     }
 
     // Spawn cars according to road capacity, building count & time-of-day rush multiplier
@@ -1413,12 +1222,9 @@ export class CitySimulation {
     const startRoad = findAdjacentRoadTile(this.tiles, origin.x, origin.y);
     if (!startRoad) return false;
 
-    const sortedCemeteries = [...cemeteries].sort((a, b) => {
-      const aFull = a.totalVisits >= a.capacity ? 1 : 0;
-      const bFull = b.totalVisits >= b.capacity ? 1 : 0;
-      if (aFull !== bFull) return aFull - bFull;
-      return Math.hypot(a.x - origin.x, a.y - origin.y) - Math.hypot(b.x - origin.x, b.y - origin.y);
-    });
+    const sortedCemeteries = [...cemeteries].sort(
+      (a, b) => Math.hypot(a.x - origin.x, a.y - origin.y) - Math.hypot(b.x - origin.x, b.y - origin.y)
+    );
 
     for (const cem of sortedCemeteries) {
       const endRoad = findAdjacentRoadTile(this.tiles, cem.x, cem.y);
@@ -2279,8 +2085,8 @@ export class CitySimulation {
       ) {
         const station = this.buildingsList.find((b) => b.id === car.returnStationId);
         if (station) {
-          const currTileX = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(car.wx / TILE_SIZE)));
-          const currTileY = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(car.wy / TILE_SIZE)));
+          const currTileX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(car.wx / TILE_SIZE)));
+          const currTileY = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(car.wy / TILE_SIZE)));
           const startRoad =
             findAdjacentRoadTile(this.tiles, currTileX, currTileY) ||
             (this.getTile(currTileX, currTileY)?.hasRoad ? { x: currTileX, y: currTileY } : null);
@@ -2383,8 +2189,8 @@ export class CitySimulation {
     const firstTarget = jail || station;
     if (!firstTarget) return false;
 
-    const currTileX = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(car.wx / TILE_SIZE)));
-    const currTileY = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(car.wy / TILE_SIZE)));
+    const currTileX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(car.wx / TILE_SIZE)));
+    const currTileY = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(car.wy / TILE_SIZE)));
     const currTile = this.getTile(currTileX, currTileY);
     const startRoad =
       currTile && currTile.hasRoad
@@ -2560,7 +2366,7 @@ export class CitySimulation {
       this.crises.warActive || this.people.some((p) => p.role === 'invader');
 
     // 2. Spawn woodcutters if forest tiles & connected buildings exist (never spawn in middle of nowhere or during curfew/war)
-    const forestTiles = this.tiles.filter((t) => t.isUnlocked && (t.terrain === 'forest' || t.terrain === 'jungle'));
+    const forestTiles = this.tiles.filter((t) => t.terrain === 'forest');
     const activeWoodcutters = this.people.filter((p) => p.role === 'woodcutter');
     const desiredWoodcutters =
       !curfew && !isWarPanic && forestTiles.length > 0 && this.buildingsList.length > 0
@@ -2608,7 +2414,7 @@ export class CitySimulation {
           if (res === 'arrived') {
             if (p.destBuildingId) {
               const dest = this.buildingsList.find((b) => b.id === p.destBuildingId);
-              this.adjustBuildingVisits(dest, 1);
+              if (dest) dest.totalVisits += 1;
             }
             p.state = 'idling';
             p.holdTimer = 1.6 + Math.random() * 1.4;
@@ -2620,7 +2426,7 @@ export class CitySimulation {
           if (p.holdTimer <= 0) {
             if (p.destBuildingId) {
               const dest = this.buildingsList.find((b) => b.id === p.destBuildingId);
-              this.adjustBuildingVisits(dest, -1);
+              if (dest) dest.totalVisits = Math.max(0, dest.totalVisits - 1);
             }
             if (!this.assignReturnRoute(p)) {
               this.people.splice(i, 1);
@@ -2632,7 +2438,7 @@ export class CitySimulation {
           if (res === 'arrived') {
             if (p.homeBuildingId) {
               const home = this.buildingsList.find((b) => b.id === p.homeBuildingId);
-              this.adjustBuildingVisits(home, 1);
+              if (home) home.totalVisits += 1;
             }
             this.people.splice(i, 1);
           } else if (res === 'blocked' || p.holdTimer <= 0) {
@@ -2749,7 +2555,7 @@ export class CitySimulation {
               p.targetTileX !== undefined && p.targetTileY !== undefined
                 ? this.getTile(p.targetTileX, p.targetTileY)
                 : null;
-            if (targetTile && (targetTile.terrain === 'grass' || targetTile.terrain === 'sand') && !targetTile.hasRoad && !targetTile.building) {
+            if (targetTile && targetTile.terrain === 'grass' && !targetTile.hasRoad && !targetTile.building) {
               p.state = 'planting';
               p.holdTimer = 1.3;
             } else if (!this.assignPlanterTarget(p)) {
@@ -2768,7 +2574,7 @@ export class CitySimulation {
               p.targetTileX !== undefined && p.targetTileY !== undefined
                 ? this.getTile(p.targetTileX, p.targetTileY)
                 : null;
-            if (targetTile && (targetTile.terrain === 'grass' || targetTile.terrain === 'sand') && !targetTile.hasRoad && !targetTile.building) {
+            if (targetTile && targetTile.terrain === 'grass' && !targetTile.hasRoad && !targetTile.building) {
               targetTile.terrain = 'forest';
               this.plantedTrees += 1;
               this.deforestationPressure = Math.max(0, this.deforestationPressure - 1);
@@ -2848,7 +2654,7 @@ export class CitySimulation {
               p.targetTileX !== undefined && p.targetTileY !== undefined
                 ? this.getTile(p.targetTileX, p.targetTileY)
                 : null;
-            if (targetTile && (targetTile.terrain === 'forest' || targetTile.terrain === 'jungle')) {
+            if (targetTile && targetTile.terrain === 'forest') {
               p.state = 'chopping';
             } else if (!this.assignWoodcutterTarget(p)) {
               this.people.splice(i, 1);
@@ -2863,7 +2669,7 @@ export class CitySimulation {
             p.targetTileX !== undefined && p.targetTileY !== undefined
               ? this.getTile(p.targetTileX, p.targetTileY)
               : null;
-          if (!targetTile || (targetTile.terrain !== 'forest' && targetTile.terrain !== 'jungle')) {
+          if (!targetTile || targetTile.terrain !== 'forest') {
             if (!this.assignWoodcutterTarget(p)) {
               this.people.splice(i, 1);
             }
@@ -2944,8 +2750,8 @@ export class CitySimulation {
     allowFrozenWater = false,
     allowAllTerrain = false
   ): GridPoint | null {
-    const tx = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(wx / TILE_SIZE)));
-    const ty = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(wy / TILE_SIZE)));
+    const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(wx / TILE_SIZE)));
+    const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(wy / TILE_SIZE)));
     if (allowAllTerrain) return { x: tx, y: ty };
     const tile = this.getTile(tx, ty);
     if (tile && isPedestrianTileWalkable(tile, allowFrozenWater, allowAllTerrain)) {
@@ -3014,8 +2820,8 @@ export class CitySimulation {
     const allowFrozen = this.canPersonSkateOnFrozenWater(p);
     const allowAll = p.role === 'invader' || (p.role === 'soldier' && this.crises.warActive);
     // If person is stranded on a newly paved unmarked road or water tile, step back to adjacent walkable tile
-    const curTx = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(p.wx / TILE_SIZE)));
-    const curTy = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(p.wy / TILE_SIZE)));
+    const curTx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(p.wx / TILE_SIZE)));
+    const curTy = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(p.wy / TILE_SIZE)));
     const curTile = this.getTile(curTx, curTy);
     if (!allowAll && curTile && !isPedestrianTileWalkable(curTile, allowFrozen)) {
       const prevIdx = Math.max(0, (p.pedestrianPathIndex ?? 1) - 1);
@@ -3075,8 +2881,8 @@ export class CitySimulation {
         const step = Math.min(dist, effectiveSpeed * realDt);
         const nextWx = p.wx + (dx / dist) * step;
         const nextWy = p.wy + (dy / dist) * step;
-        const nextTx = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(nextWx / TILE_SIZE)));
-        const nextTy = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(nextWy / TILE_SIZE)));
+        const nextTx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(nextWx / TILE_SIZE)));
+        const nextTy = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(nextWy / TILE_SIZE)));
         if (!allowAll && (nextTx !== curTx || nextTy !== curTy)) {
           const nextTile = this.getTile(nextTx, nextTy);
           if (!this.canPersonStepOntoTile(nextTile, p.targetTileX, p.targetTileY, allowFrozen)) {
@@ -3233,7 +3039,7 @@ export class CitySimulation {
   }
 
   private assignWoodcutterTarget(woodcutter: Person): boolean {
-    const forestTiles = this.tiles.filter((t) => t.isUnlocked && (t.terrain === 'forest' || t.terrain === 'jungle'));
+    const forestTiles = this.tiles.filter((t) => t.terrain === 'forest');
     if (forestTiles.length === 0) return false;
     const startPt = this.getCurrentWalkableStart(woodcutter.wx, woodcutter.wy);
     if (!startPt) return false;
@@ -3260,124 +3066,10 @@ export class CitySimulation {
     return false;
   }
 
-  private spawnPaperboyRoute() {
-    if (this.people.some((p) => p.role === 'paperboy')) return;
-    const houses = this.buildingsList.filter((b) => b.category === 'residential');
-    if (houses.length === 0) return;
-
-    const origins = this.buildingsList.filter(
-      (b) => b.category === 'city_hall' || b.category === 'commercial' || b.category === 'workplace'
-    );
-    const anchor = origins.length > 0 ? origins[0] : houses[0];
-    const routeHouses = [...houses]
-      .sort((a, b) => Math.hypot(a.x - anchor.x, a.y - anchor.y) - Math.hypot(b.x - anchor.x, b.y - anchor.y))
-      .slice(0, 8);
-    if (routeHouses.length === 0) return;
-
-    const first = routeHouses[0];
-    const path = findPedestrianPath(this.tiles, { x: anchor.x, y: anchor.y }, { x: first.x, y: first.y });
-    if (!path) return;
-
-    this.people.push({
-      id: `ppl_${this.personIdCounter++}`,
-      role: 'paperboy',
-      wx: (anchor.x + 0.5) * TILE_SIZE,
-      wy: (anchor.y + 0.8) * TILE_SIZE,
-      targetWx: (first.x + 0.5) * TILE_SIZE,
-      targetWy: (first.y + 0.84) * TILE_SIZE,
-      speed: 52,
-      shirtColor: '#0284C7',
-      hatColor: '#F59E0B',
-      animPhase: 0,
-      state: 'delivering',
-      homeBuildingId: anchor.id,
-      destBuildingId: first.id,
-      deliveryQueueIds: routeHouses.slice(1).map((h) => h.id),
-      targetTileX: first.x,
-      targetTileY: first.y,
-      pedestrianPath: path,
-      pedestrianPathIndex: path.length > 1 ? 1 : 0,
-      holdTimer: 0,
-    });
-  }
-
-  private spawnParkVisitor() {
-    const parks = this.buildingsList.filter((b) => b.category === 'park');
-    const houses = this.buildingsList.filter((b) => b.category === 'residential' || b.category === 'school');
-    if (parks.length === 0 || houses.length === 0) return;
-
-    // Prioritize playgrounds so kids visibly play in playgrounds!
-    const sortedParks = [...parks].sort((a, b) => {
-      const aPg = a.parkVariant === 'playground' ? 0 : 1;
-      const bPg = b.parkVariant === 'playground' ? 0 : 1;
-      if (aPg !== bPg) return aPg - bPg;
-      return a.totalVisits - b.totalVisits;
-    });
-
-    for (const park of sortedParks.slice(0, 4)) {
-      if (park.totalVisits >= park.capacity) continue;
-      const home = houses[Math.floor(Math.random() * houses.length)];
-      if (home.id === park.id) continue;
-      const path = findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: park.x, y: park.y });
-      if (!path) continue;
-      const childShirts = ['#F43F5E', '#38BDF8', '#FACC15', '#4ADE80', '#A855F7', '#FB923C'];
-      const offsetX = (Math.random() - 0.5) * 18;
-      const offsetY = (Math.random() - 0.5) * 14;
-      this.people.push({
-        id: `ppl_${this.personIdCounter++}`,
-        role: 'hobbyist',
-        hobbyKind: park.parkVariant === 'playground' ? 'skateboarding' : 'bird_feeding',
-        speechTopic: 'park_play',
-        wx: (home.x + 0.5) * TILE_SIZE,
-        wy: (home.y + 0.78) * TILE_SIZE,
-        targetWx: (park.x + 0.5) * TILE_SIZE + offsetX,
-        targetWy: (park.y + 0.55) * TILE_SIZE + offsetY,
-        speed: 30,
-        shirtColor: childShirts[Math.floor(Math.random() * childShirts.length)],
-        hatColor: park.parkVariant === 'playground' ? '#FDE047' : undefined,
-        animPhase: Math.random() * Math.PI * 2,
-        state: 'walking',
-        homeBuildingId: home.id,
-        destBuildingId: park.id,
-        targetTileX: park.x,
-        targetTileY: park.y,
-        pedestrianPath: path,
-        pedestrianPathIndex: path.length > 1 ? 1 : 0,
-        holdTimer: 0,
-      });
-      return;
-    }
-  }
-
   private updateCitizensAndHobbies(simDt: number, realDt: number, playAudio: boolean) {
     const curfew = this.isOutdoorCurfew();
     const isWarPanic =
       this.crises.warActive || this.people.some((p) => p.role === 'invader');
-
-    // 0. Daily early-morning cyclist newspaper route (around 06:15 AM) + age/pickup porch papers
-    for (let i = this.porchPapers.length - 1; i >= 0; i--) {
-      this.porchPapers[i].age += simDt;
-      if (this.porchPapers[i].age >= (this.porchPapers[i].maxAge ?? 16)) {
-        this.porchPapers.splice(i, 1);
-      }
-    }
-    const currentHour = this.minutesOfDay / 60;
-    if (!isWarPanic && currentHour >= 6.1 && currentHour < 7.8 && this.lastMorningPaperDay !== this.dayCount) {
-      this.lastMorningPaperDay = this.dayCount;
-      this.spawnPaperboyRoute();
-    }
-
-    // 0.5 Spawn active park & playground visitors so kids visibly play in parks/playgrounds
-    const parksCount = this.buildingsList.filter((b) => b.category === 'park').length;
-    const parkPlayers = this.people.filter((p) => p.role === 'hobbyist' && p.speechTopic === 'park_play').length;
-    const maxParkPlayers = curfew || isWarPanic ? 0 : Math.min(8, parksCount * 3);
-    if (parkPlayers < maxParkPlayers) {
-      this.parkVisitorAccumulator += simDt;
-      if (this.parkVisitorAccumulator >= 2.8) {
-        this.parkVisitorAccumulator = 0;
-        this.spawnParkVisitor();
-      }
-    }
 
     // 1. Spawn Fishers along reachable riverbanks / water shorelines (only compute shore scan on timer tick!)
     if (!curfew && !isWarPanic && this.buildingsList.length > 0) {
@@ -3398,11 +3090,12 @@ export class CitySimulation {
 
     // 2. Spawn Seasonal Hobbyists from real buildings (calmer outside school hours after 4pm; disabled at Night/Rain or War)
     const activeHobbyists = this.people.filter((p) => p.role === 'hobbyist');
+    const currentHour = this.minutesOfDay / 60;
     const isAfterSchoolHours = currentHour >= 16 || currentHour < 8;
-    const maxHobbyists = curfew || isWarPanic ? 0 : isAfterSchoolHours ? 5 : 7;
+    const maxHobbyists = curfew || isWarPanic ? 0 : isAfterSchoolHours ? 4 : 6;
     if (activeHobbyists.length < maxHobbyists && this.buildingsList.length > 0) {
       this.hobbyistSpawnAccumulator += simDt;
-      const hobbyInterval = isAfterSchoolHours ? 7.0 : 4.8;
+      const hobbyInterval = isAfterSchoolHours ? 7.5 : 5.2;
       if (this.hobbyistSpawnAccumulator >= hobbyInterval) {
         this.hobbyistSpawnAccumulator = 0;
         this.spawnHobbyist();
@@ -3435,120 +3128,9 @@ export class CitySimulation {
       }
     }
 
-    // 4. Step Paperboys, Porch Pickups, Fishers, Hobbyists, and Shoppers
+    // 4. Step Fishers, Hobbyists, and Shoppers
     for (let i = this.people.length - 1; i >= 0; i--) {
       const p = this.people[i];
-
-      if (p.role === 'paperboy') {
-        if (p.state === 'delivering') {
-          const res = this.stepPersonAlongPath(p, realDt, 14);
-          if (res === 'arrived') {
-            const house = this.buildingsList.find((b) => b.id === p.destBuildingId);
-            if (house) {
-              const dropWx = (house.x + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 6;
-              const dropWy = (house.y + 0.85) * TILE_SIZE;
-              const paperId = `paper_${this.paperIdCounter++}`;
-              this.porchPapers.push({
-                id: paperId,
-                x: house.x,
-                y: house.y,
-                wx: dropWx,
-                wy: dropWy,
-                age: 0,
-                maxAge: 14,
-              });
-              this.floatingLabels.push({
-                wx: dropWx,
-                wy: dropWy - 12,
-                text: '📰 Special Delivery!',
-                color: '#0F172A',
-                bgColor: '#FEF08A',
-                age: 0,
-                maxAge: 1.5,
-              });
-              // Resident pops onto the porch to pick up the paper!
-              this.people.push({
-                id: `ppl_${this.personIdCounter++}`,
-                role: 'pedestrian',
-                speechTopic: 'pickup_paper',
-                eventId: paperId,
-                wx: (house.x + 0.5) * TILE_SIZE,
-                wy: (house.y + 0.72) * TILE_SIZE,
-                targetWx: dropWx,
-                targetWy: dropWy,
-                speed: 22,
-                shirtColor: '#10B981',
-                animPhase: 0,
-                state: 'idling',
-                homeBuildingId: house.id,
-                holdTimer: 2.2,
-              });
-            }
-            // Route to next house in delivery queue
-            let nextDispatched = false;
-            const queue = p.deliveryQueueIds || [];
-            while (queue.length > 0 && !nextDispatched) {
-              const nextId = queue.shift()!;
-              const nextHouse = this.buildingsList.find((b) => b.id === nextId);
-              if (
-                nextHouse &&
-                this.assignPedestrianRoute(
-                  p,
-                  nextHouse.x,
-                  nextHouse.y,
-                  (nextHouse.x + 0.5) * TILE_SIZE,
-                  (nextHouse.y + 0.84) * TILE_SIZE
-                )
-              ) {
-                p.destBuildingId = nextHouse.id;
-                nextDispatched = true;
-              }
-            }
-            if (!nextDispatched) {
-              if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
-            }
-          } else if (res === 'blocked') {
-            if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
-          }
-        } else {
-          p.holdTimer -= realDt;
-          const res = this.stepPersonAlongPath(p, realDt, 14);
-          if (res !== 'moving' || p.holdTimer <= 0) {
-            this.people.splice(i, 1);
-          }
-        }
-        continue;
-      }
-
-      if (p.role === 'pedestrian' && p.speechTopic === 'pickup_paper') {
-        p.holdTimer -= realDt;
-        const dx = p.targetWx - p.wx;
-        const dy = p.targetWy - p.wy;
-        const dist = Math.hypot(dx, dy);
-        if (dist > 1.8) {
-          const step = Math.min(dist, p.speed * realDt);
-          p.wx += (dx / dist) * step;
-          p.wy += (dy / dist) * step;
-          p.animPhase += realDt * 7;
-        }
-        if (p.holdTimer <= 0) {
-          if (p.eventId) {
-            const ppIdx = this.porchPapers.findIndex((pp) => pp.id === p.eventId);
-            if (ppIdx !== -1) this.porchPapers.splice(ppIdx, 1);
-          }
-          this.floatingLabels.push({
-            wx: p.wx,
-            wy: p.wy - 12,
-            text: 'Picked up paper!',
-            color: '#F8FAFC',
-            bgColor: '#0284C7',
-            age: 0,
-            maxAge: 1.3,
-          });
-          this.people.splice(i, 1);
-        }
-        continue;
-      }
 
       if (p.role === 'fisher') {
         if ((curfew || isWarPanic) && p.state !== 'returning') {
@@ -3695,23 +3277,12 @@ export class CitySimulation {
           if (res === 'arrived') {
             p.state = 'doing_hobby';
             p.holdTimer = 14 + Math.random() * 10;
-            if (p.destBuildingId) {
-              const destB = this.buildingsList.find((b) => b.id === p.destBuildingId);
-              this.adjustBuildingVisits(destB, 1);
-            }
           } else if (res === 'blocked') {
             this.people.splice(i, 1);
           }
         } else if (p.state === 'doing_hobby') {
           p.animPhase += realDt * (p.hobbyKind === 'music' ? 7 : p.hobbyKind === 'ice_skating' || p.hobbyKind === 'skateboarding' ? 5.6 : 4.2);
           p.holdTimer -= realDt;
-
-          if (p.speechTopic === 'park_play' && p.targetTileX !== undefined && p.targetTileY !== undefined) {
-            const cx = (p.targetTileX + 0.5) * TILE_SIZE;
-            const cy = (p.targetTileY + 0.56) * TILE_SIZE;
-            p.wx = cx + Math.sin(p.animPhase * 0.7) * 10;
-            p.wy = cy + Math.cos(p.animPhase * 0.9) * 5;
-          }
 
           if (p.hobbyKind === 'music' && Math.random() < realDt * 0.45) {
             const notes = ['♪', '♫', '♩'];
@@ -3808,10 +3379,6 @@ export class CitySimulation {
               });
             } else if (p.hobbyKind === 'harvesting') {
               p.carryingItem = 'produce';
-            }
-            if (p.destBuildingId) {
-              const destB = this.buildingsList.find((b) => b.id === p.destBuildingId);
-              this.adjustBuildingVisits(destB, -1);
             }
             if (!this.assignReturnRoute(p)) {
               this.people.splice(i, 1);
@@ -3949,7 +3516,7 @@ export class CitySimulation {
               this.people.splice(i, 1);
               continue;
             }
-            this.adjustBuildingVisits(shop, 1);
+            shop.totalVisits += 1;
             p.carryingItem = this.getItemForShop(shop);
             if (
               shop.blueprintId === 'tackle_shop' &&
@@ -3989,7 +3556,7 @@ export class CitySimulation {
           if (p.holdTimer <= 0) {
             if (p.destBuildingId) {
               const shop = this.buildingsList.find((b) => b.id === p.destBuildingId);
-              this.adjustBuildingVisits(shop, -1);
+              if (shop) shop.totalVisits = Math.max(0, shop.totalVisits - 1);
             }
             if (!this.assignReturnRoute(p)) {
               this.people.splice(i, 1);
@@ -4001,7 +3568,7 @@ export class CitySimulation {
           if (res === 'arrived') {
             if (p.homeBuildingId) {
               const home = this.buildingsList.find((b) => b.id === p.homeBuildingId);
-              this.adjustBuildingVisits(home, 1);
+              if (home) home.totalVisits += 1;
             }
             this.people.splice(i, 1);
           } else if (res === 'blocked' || p.holdTimer <= 0) {
@@ -4034,12 +3601,12 @@ export class CitySimulation {
       { dx: -1, dy: 0 },
     ];
     for (const tile of this.tiles) {
-      if (!tile.isUnlocked || tile.terrain === 'water' || tile.hasRoad) continue;
+      if (tile.terrain === 'water' || tile.hasRoad) continue;
       if (tile.building && tile.building.category !== 'park') continue;
       if (busy.has(`${tile.x},${tile.y}`)) continue;
       for (const d of dirs) {
         const nt = this.getTile(tile.x + d.dx, tile.y + d.dy);
-        if (nt && nt.isUnlocked && nt.terrain === 'water' && !nt.hasFootbridge) {
+        if (nt && nt.terrain === 'water' && !nt.hasFootbridge) {
           spots.push({ tile, waterDx: d.dx, waterDy: d.dy });
           break;
         }
@@ -4166,7 +3733,7 @@ export class CitySimulation {
     ];
 
     for (const t of this.tiles) {
-      if (!t.isUnlocked || t.hasRoad || t.isBridgeBroken) continue;
+      if (t.hasRoad || t.isBridgeBroken) continue;
       if (busyKeys.has(`${t.x},${t.y}`)) continue;
       if (this.marketStalls.some((s) => s.x === t.x && s.y === t.y)) continue;
 
@@ -4186,18 +3753,12 @@ export class CitySimulation {
         continue;
       }
 
-      const walkableGround = t.terrain === 'grass' || t.terrain === 'sand';
-
       if (hobbyKind === 'painting') {
         const nearScenic = dirs.some((d) => {
           const nt = this.getTile(t.x + d.dx, t.y + d.dy);
-          return (
-            nt &&
-            nt.isUnlocked &&
-            (nt.terrain === 'water' || nt.terrain === 'forest' || nt.terrain === 'jungle' || nt.building?.category === 'park')
-          );
+          return nt && (nt.terrain === 'water' || nt.terrain === 'forest' || nt.building?.category === 'park');
         });
-        if (nearScenic && walkableGround) candidateSpots.push(t);
+        if (nearScenic && t.terrain === 'grass') candidateSpots.push(t);
       } else if (
         hobbyKind === 'kite' ||
         hobbyKind === 'snowball_fight' ||
@@ -4206,10 +3767,10 @@ export class CitySimulation {
         hobbyKind === 'skateboarding' ||
         hobbyKind === 'bird_feeding'
       ) {
-        if (t.building?.category === 'park' || (walkableGround && !t.building)) {
+        if (t.building?.category === 'park' || (t.terrain === 'grass' && !t.building)) {
           const openNeighbors = dirs.filter((d) => {
             const nt = this.getTile(t.x + d.dx, t.y + d.dy);
-            return nt && nt.isUnlocked && (nt.terrain === 'grass' || nt.terrain === 'sand') && !nt.hasRoad && !nt.building;
+            return nt && nt.terrain === 'grass' && !nt.hasRoad && !nt.building;
           }).length;
           if (openNeighbors >= 1 || t.building?.category === 'park') candidateSpots.push(t);
         }
@@ -4218,9 +3779,9 @@ export class CitySimulation {
           t.building?.category === 'park' ||
           dirs.some((d) => {
             const nt = this.getTile(t.x + d.dx, t.y + d.dy);
-            return nt && nt.isUnlocked && (nt.terrain === 'forest' || nt.terrain === 'jungle' || nt.building?.category === 'park');
+            return nt && (nt.terrain === 'forest' || nt.building?.category === 'park');
           });
-        if (nearNature && walkableGround) candidateSpots.push(t);
+        if (nearNature && t.terrain === 'grass') candidateSpots.push(t);
       } else if (hobbyKind === 'raking_leaves' || hobbyKind === 'harvesting' || hobbyKind === 'gardening') {
         const nearGreen =
           t.building?.category === 'park' ||
@@ -4229,15 +3790,13 @@ export class CitySimulation {
             const nt = this.getTile(t.x + d.dx, t.y + d.dy);
             return (
               nt &&
-              nt.isUnlocked &&
               (nt.terrain === 'forest' ||
-                nt.terrain === 'jungle' ||
                 nt.building?.category === 'park' ||
                 nt.building?.category === 'crops' ||
                 nt.building?.category === 'residential')
             );
           });
-        if (nearGreen && walkableGround) candidateSpots.push(t);
+        if (nearGreen && t.terrain === 'grass') candidateSpots.push(t);
       } else if (hobbyKind === 'music') {
         const nearVenue = dirs.some((d) => {
           const nt = this.getTile(t.x + d.dx, t.y + d.dy);
@@ -4414,7 +3973,7 @@ export class CitySimulation {
         const path = findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: shop.x, y: shop.y });
         if (path) {
           const shirts = ['#EC4899', '#0EA5E9', '#10B981', '#F59E0B', '#8B5CF6', '#FB7185'];
-          this.adjustBuildingVisits(home, -1);
+          home.totalVisits = Math.max(0, home.totalVisits - 1);
           this.people.push({
             id: `ppl_${this.personIdCounter++}`,
             role: 'shopper',
@@ -4456,7 +4015,7 @@ export class CitySimulation {
       for (const dest of destPool) {
         const path = findPedestrianPath(this.tiles, { x: origin.x, y: origin.y }, { x: dest.x, y: dest.y });
         if (path && path.length >= 2) {
-          this.adjustBuildingVisits(origin, -1);
+          origin.totalVisits = Math.max(0, origin.totalVisits - 1);
           this.people.push({
             id: `ppl_${this.personIdCounter++}`,
             role: 'pedestrian',
@@ -4491,14 +4050,13 @@ export class CitySimulation {
       { dx: -1, dy: 0 },
     ];
     for (const t of this.tiles) {
-      if (!t.isUnlocked || (t.terrain !== 'grass' && t.terrain !== 'sand') || t.hasRoad || t.building) continue;
+      if (t.terrain !== 'grass' || t.hasRoad || t.building) continue;
       if (this.marketStalls.some((s) => Math.abs(s.x - t.x) <= 1 && Math.abs(s.y - t.y) <= 1)) continue;
       if (this.fires.some((f) => f.status === 'active' && f.x === t.x && f.y === t.y)) continue;
       const nearActivity = dirs.some((d) => {
         const nt = this.getTile(t.x + d.dx, t.y + d.dy);
         return (
           nt &&
-          nt.isUnlocked &&
           (nt.hasRoad ||
             nt.building?.category === 'park' ||
             nt.building?.category === 'commercial' ||
@@ -4526,7 +4084,7 @@ export class CitySimulation {
     this.totalJailed += count;
     const jail = this.buildingsList.find((b) => b.category === 'jail');
     if (jail) {
-      this.adjustBuildingVisits(jail, count);
+      jail.totalVisits += count;
       this.floatingLabels.push({
         wx: (jail.x + 0.5) * TILE_SIZE,
         wy: (jail.y + 0.25) * TILE_SIZE,
@@ -4542,8 +4100,8 @@ export class CitySimulation {
   private dispatchPoliceToEscapee(escapee: Person): boolean {
     const stations = this.buildingsList.filter((b) => b.category === 'police');
     if (stations.length === 0) return false;
-    const escX = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(escapee.wx / TILE_SIZE)));
-    const escY = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(escapee.wy / TILE_SIZE)));
+    const escX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(escapee.wx / TILE_SIZE)));
+    const escY = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(escapee.wy / TILE_SIZE)));
     const destRoad = findAdjacentRoadTile(this.tiles, escX, escY);
     if (!destRoad) return false;
 
@@ -4753,7 +4311,7 @@ export class CitySimulation {
         if (Math.random() < 0.36) {
           const jail = jails[Math.floor(Math.random() * jails.length)];
           this.prisonInmates = Math.max(0, this.prisonInmates - 1);
-          this.adjustBuildingVisits(jail, -1);
+          jail.totalVisits = Math.max(0, jail.totalVisits - 1);
           const esc: Person = {
             id: `ppl_${this.personIdCounter++}`,
             role: 'escapee',
@@ -4798,7 +4356,7 @@ export class CitySimulation {
 
     if (jails.length === 0) return;
     const jail = jails[Math.floor(Math.random() * jails.length)];
-    this.adjustBuildingVisits(jail, -1);
+    jail.totalVisits = Math.max(0, jail.totalVisits - 1);
     const destinations = this.buildingsList
       .filter((b) => b.id !== jail.id && b.category !== 'road_path')
       .sort(() => Math.random() - 0.5);
@@ -5683,11 +5241,10 @@ export class CitySimulation {
   public triggerDisaster(type: 'tornado' | 'earthquake' | 'flood', playAudio = true): boolean {
     if (this.chaosCooldowns[type] > 0) return false;
     this.chaosCooldowns[type] = this.CHAOS_COOLDOWN_SECONDS;
-    const bounds = this.getUnlockedBounds();
 
     if (type === 'tornado') {
-      const rx = bounds.minX + 2 + Math.floor(Math.random() * Math.max(1, bounds.width - 4));
-      const ry = bounds.minY + 2 + Math.floor(Math.random() * Math.max(1, bounds.height - 4));
+      const rx = 3 + Math.floor(Math.random() * (GRID_COLS - 6));
+      const ry = 3 + Math.floor(Math.random() * (GRID_ROWS - 6));
       this.crises.tornadoActive = true;
       this.crises.tornadoRemaining = 26;
       this.crises.tornadoWx = (rx + 0.5) * TILE_SIZE;
@@ -5708,8 +5265,9 @@ export class CitySimulation {
       this.crises.earthquakeActive = true;
       this.crises.earthquakeRemaining = 14;
       this.earthquakeShakeIntensity = 1.0;
+      // Crack 1-2 bridges & drop 1-2 road craters immediately
       const waterRoads = this.tiles.filter(
-        (t) => t.isUnlocked && t.terrain === 'water' && (t.hasRoad || t.hasFootbridge) && !t.isBridgeBroken
+        (t) => t.terrain === 'water' && (t.hasRoad || t.hasFootbridge) && !t.isBridgeBroken
       );
       if (waterRoads.length > 0) {
         const pick = waterRoads[Math.floor(Math.random() * waterRoads.length)];
@@ -5729,7 +5287,7 @@ export class CitySimulation {
           statusTimer: 0,
         });
       }
-      const roadTiles = this.tiles.filter((t) => t.isUnlocked && t.hasRoad && t.terrain !== 'water');
+      const roadTiles = this.tiles.filter((t) => t.hasRoad && t.terrain !== 'water');
       if (roadTiles.length > 0 && this.blastCraters.length < 18) {
         const spot = roadTiles[Math.floor(Math.random() * roadTiles.length)];
         if (!this.blastCraters.some((c) => c.x === spot.x && c.y === spot.y)) {
@@ -5745,8 +5303,8 @@ export class CitySimulation {
         }
       }
       this.floatingLabels.push({
-        wx: ((bounds.minX + bounds.maxX + 1) * 0.5) * TILE_SIZE,
-        wy: ((bounds.minY + bounds.maxY + 1) * 0.45) * TILE_SIZE,
+        wx: (GRID_COLS * TILE_SIZE) * 0.5,
+        wy: (GRID_ROWS * TILE_SIZE) * 0.4,
         text: 'EARTHQUAKE!',
         color: '#FEF2F2',
         bgColor: '#92400E',
@@ -5759,6 +5317,7 @@ export class CitySimulation {
       this.crises.floodRemaining = 32;
       for (const t of this.tiles) t.isFlooded = false;
 
+      // Flood low-lying shore tiles bordering water first
       const candidates: MapTile[] = [];
       const dirs = [
         { dx: 1, dy: 0 },
@@ -5767,7 +5326,7 @@ export class CitySimulation {
         { dx: 0, dy: -1 },
       ];
       for (const t of this.tiles) {
-        if (!t.isUnlocked || t.terrain === 'water') continue;
+        if (t.terrain === 'water') continue;
         if (t.building?.category === 'city_hall') continue;
         const nearWater = dirs.some((d) => this.getTile(t.x + d.dx, t.y + d.dy)?.terrain === 'water');
         if (nearWater) candidates.push(t);
@@ -5775,24 +5334,25 @@ export class CitySimulation {
       const pool =
         candidates.length > 0
           ? candidates
-          : this.tiles.filter((t) => t.isUnlocked && t.terrain !== 'water' && t.building?.category !== 'city_hall');
+          : this.tiles.filter((t) => t.terrain !== 'water' && t.building?.category !== 'city_hall');
       const shuffled = [...pool].sort(() => Math.random() - 0.5);
       for (const t of shuffled.slice(0, 26)) {
         t.isFlooded = true;
       }
+      // Expand flood 1 tile further inland from half the flooded coastal tiles
       const firstRing = this.tiles.filter((t) => t.isFlooded);
       for (const ft of firstRing.slice(0, 12)) {
         for (const d of dirs) {
           const nt = this.getTile(ft.x + d.dx, ft.y + d.dy);
-          if (nt && nt.isUnlocked && nt.terrain !== 'water' && nt.building?.category !== 'city_hall' && Math.random() < 0.55) {
+          if (nt && nt.terrain !== 'water' && nt.building?.category !== 'city_hall' && Math.random() < 0.55) {
             nt.isFlooded = true;
           }
         }
       }
       const centerFlood = this.tiles.find((t) => t.isFlooded);
       this.floatingLabels.push({
-        wx: ((centerFlood?.x ?? (bounds.minX + bounds.maxX) / 2) + 0.5) * TILE_SIZE,
-        wy: ((centerFlood?.y ?? (bounds.minY + bounds.maxY) / 2) + 0.4) * TILE_SIZE,
+        wx: ((centerFlood?.x ?? GRID_COLS / 2) + 0.5) * TILE_SIZE,
+        wy: ((centerFlood?.y ?? GRID_ROWS / 2) + 0.4) * TILE_SIZE,
         text: 'FLASH FLOOD!',
         color: '#E0F2FE',
         bgColor: '#0369A1',
@@ -5826,10 +5386,11 @@ export class CitySimulation {
     const originPool = cityHalls.length > 0 ? cityHalls : bases;
 
     const dirtyTargets: MapTile[] = [];
+    // Prioritize actual littered tiles or shorelines next to ocean trash!
     for (const tr of this.trashItems) {
       if (!tr.inWater) {
         const t = this.getTile(tr.x, tr.y);
-        if (t && t.isUnlocked && isPedestrianTileWalkable(t)) dirtyTargets.push(t);
+        if (t && isPedestrianTileWalkable(t)) dirtyTargets.push(t);
       } else {
         const dirs = [
           { dx: 1, dy: 0 },
@@ -5839,7 +5400,7 @@ export class CitySimulation {
         ];
         for (const d of dirs) {
           const nt = this.getTile(tr.x + d.dx, tr.y + d.dy);
-          if (nt && nt.isUnlocked && isPedestrianTileWalkable(nt)) {
+          if (nt && isPedestrianTileWalkable(nt)) {
             dirtyTargets.push(nt);
             break;
           }
@@ -5849,7 +5410,7 @@ export class CitySimulation {
 
     if (dirtyTargets.length === 0) {
       for (const t of this.tiles) {
-        if (!t.isUnlocked || !isPedestrianTileWalkable(t)) continue;
+        if (!isPedestrianTileWalkable(t)) continue;
         const nearWater =
           this.getTile(t.x + 1, t.y)?.terrain === 'water' ||
           this.getTile(t.x - 1, t.y)?.terrain === 'water' ||
@@ -5933,23 +5494,17 @@ export class CitySimulation {
     if (targets.length === 0) return;
     const cityHalls = targets.filter((b) => b.category === 'city_hall');
 
-    // Invading foreign nation forces & armored tanks enter along the perimeter edge of unlocked landmass
-    const perimeterEntries: MapTile[] = [];
-    const dirs = [
-      { dx: 1, dy: 0 },
-      { dx: -1, dy: 0 },
-      { dx: 0, dy: 1 },
-      { dx: 0, dy: -1 },
-    ];
+    // Invading foreign nation forces & armored tanks enter from the 4 corners and perimeter edges (crossing roads/bridges/rivers if needed)
+    const cornerEntries: MapTile[] = [];
+    const edgeEntries: MapTile[] = [];
     for (const t of this.tiles) {
-      if (!t.isUnlocked) continue;
-      const isFrontierEdge = dirs.some((d) => {
-        const nt = this.getTile(t.x + d.dx, t.y + d.dy);
-        return !nt || !nt.isUnlocked;
-      });
-      if (isFrontierEdge) perimeterEntries.push(t);
+      const inCorner =
+        (t.x <= 2 || t.x >= GRID_COLS - 3) && (t.y <= 2 || t.y >= GRID_ROWS - 3);
+      const onEdge = t.x === 0 || t.y === 0 || t.x === GRID_COLS - 1 || t.y === GRID_ROWS - 1;
+      if (inCorner) cornerEntries.push(t);
+      else if (onEdge) edgeEntries.push(t);
     }
-    const entryPool = perimeterEntries;
+    const entryPool = cornerEntries.length > 0 || edgeEntries.length > 0 ? [...cornerEntries, ...edgeEntries] : [];
     if (entryPool.length === 0) return;
 
     let spawnedCount = 0;
@@ -5957,7 +5512,9 @@ export class CitySimulation {
     let announcedWy: number | undefined;
 
     for (let k = 0; k < count; k++) {
-      const entry = entryPool[Math.floor(Math.random() * entryPool.length)];
+      const preferCorner = cornerEntries.length > 0 && Math.random() < 0.6;
+      const sourcePool = preferCorner ? cornerEntries : entryPool;
+      const entry = sourcePool[Math.floor(Math.random() * sourcePool.length)];
       const aimAtHall = cityHalls.length > 0 && (k === 0 || (this.mayorAlive && Math.random() < 0.55));
       const dest = aimAtHall
         ? cityHalls[0]
@@ -6034,15 +5591,9 @@ export class CitySimulation {
     let ty = targetY;
 
     if (tx === undefined || ty === undefined) {
-      const unlocked = this.tiles.filter((t) => t.isUnlocked && t.building?.category !== 'city_hall');
-      if (unlocked.length > 0) {
-        const pick = unlocked[Math.floor(Math.random() * unlocked.length)];
-        tx = pick.x;
-        ty = pick.y;
-      } else {
-        tx = CORE_OFFSET_X + 1 + Math.floor(Math.random() * (GRID_COLS - 2));
-        ty = CORE_OFFSET_Y + 1 + Math.floor(Math.random() * (GRID_ROWS - 2));
-      }
+      // Truly random coordinates across the map (avoid extreme corners)
+      tx = 1 + Math.floor(Math.random() * (GRID_COLS - 2));
+      ty = 1 + Math.floor(Math.random() * (GRID_ROWS - 2));
     }
 
     const wx = (tx + 0.5) * TILE_SIZE;
@@ -6107,10 +5658,10 @@ export class CitySimulation {
         const distSq = dx * dx + dy * dy;
         if (distSq > 5) continue;
         const t = this.getTile(tx + dx, ty + dy);
-        if (!t || !t.isUnlocked || t.terrain === 'water') continue;
+        if (!t || t.terrain === 'water') continue;
         if (t.building?.category === 'city_hall') continue;
 
-        if (t.terrain === 'forest' || t.terrain === 'jungle') {
+        if (t.terrain === 'forest') {
           t.terrain = 'grass';
         }
 
@@ -6193,7 +5744,7 @@ export class CitySimulation {
     for (let dy = -1; dy <= 1 && firesStarted < 2; dy++) {
       for (let dx = -1; dx <= 1 && firesStarted < 2; dx++) {
         const t = this.getTile(tx + dx, ty + dy);
-        if (t && t.isUnlocked && t.terrain !== 'water' && !t.hasRoad && t.building?.category !== 'city_hall') {
+        if (t && t.terrain !== 'water' && !t.hasRoad && t.building?.category !== 'city_hall') {
           if (this.startFireAt(t.x, t.y, false, false)) {
             firesStarted++;
           }
@@ -6286,35 +5837,35 @@ export class CitySimulation {
   private rollWeatherForSeason(): WeatherType {
     const r = Math.random();
     if (this.season === 'Winter') {
-      if (r < 0.28) return 'Sunny';
-      if (r < 0.48) return 'Cloudy';
-      if (r < 0.62) return 'Foggy';
-      if (r < 0.74) return 'Windy';
-      if (r < 0.96) return 'Snow';
+      if (r < 0.22) return 'Sunny';
+      if (r < 0.36) return 'Cloudy';
+      if (r < 0.5) return 'Foggy';
+      if (r < 0.6) return 'Windy';
+      if (r < 0.9) return 'Snow';
       return 'Storm';
     }
     if (this.season === 'Spring') {
-      if (r < 0.42) return 'Sunny';
-      if (r < 0.64) return 'Cloudy';
-      if (r < 0.76) return 'Foggy';
-      if (r < 0.87) return 'Windy';
-      if (r < 0.97) return 'Rain';
+      if (r < 0.3) return 'Sunny';
+      if (r < 0.48) return 'Cloudy';
+      if (r < 0.6) return 'Foggy';
+      if (r < 0.72) return 'Windy';
+      if (r < 0.9) return 'Rain';
       return 'Storm';
     }
     if (this.season === 'Summer') {
-      if (r < 0.56) return 'Sunny';
-      if (r < 0.73) return 'Cloudy';
-      if (r < 0.8) return 'Foggy';
-      if (r < 0.9) return 'Windy';
-      if (r < 0.97) return 'Rain';
+      if (r < 0.42) return 'Sunny';
+      if (r < 0.58) return 'Cloudy';
+      if (r < 0.66) return 'Foggy';
+      if (r < 0.78) return 'Windy';
+      if (r < 0.91) return 'Rain';
       return 'Storm';
     }
     // Autumn
-    if (r < 0.34) return 'Sunny';
-    if (r < 0.58) return 'Cloudy';
-    if (r < 0.74) return 'Foggy';
-    if (r < 0.87) return 'Windy';
-    if (r < 0.97) return 'Rain';
+    if (r < 0.24) return 'Sunny';
+    if (r < 0.42) return 'Cloudy';
+    if (r < 0.58) return 'Foggy';
+    if (r < 0.74) return 'Windy';
+    if (r < 0.9) return 'Rain';
     return 'Storm';
   }
 
@@ -6331,8 +5882,8 @@ export class CitySimulation {
       this.lightningFlash = 0.85;
     }
 
-    const mapW = WORLD_COLS * TILE_SIZE;
-    const mapH = WORLD_ROWS * TILE_SIZE;
+    const mapW = GRID_COLS * TILE_SIZE;
+    const mapH = GRID_ROWS * TILE_SIZE;
     const targetCount =
       this.weather === 'Storm'
         ? 145
@@ -6341,11 +5892,11 @@ export class CitySimulation {
         : this.weather === 'Snow'
         ? 95
         : this.weather === 'Windy'
-        ? 0
+        ? 55
         : this.season === 'Autumn'
-        ? 24
+        ? 28
         : this.season === 'Spring'
-        ? 18
+        ? 22
         : 0;
 
     while (this.weatherParticles.length > targetCount) {
@@ -6514,9 +6065,7 @@ export class CitySimulation {
       else if (b.category === 'police' || b.category === 'fire_station') safetyBlds++;
     }
 
-    const forestCount = this.tiles.filter(
-      (t) => t.isUnlocked && (t.terrain === 'forest' || t.terrain === 'jungle')
-    ).length;
+    const forestCount = this.tiles.filter((t) => t.terrain === 'forest').length;
     const parkBoost = Math.min(16, parks * 4.5);
     const shopBoost = Math.min(12, shops * 2.5);
     const schoolBoost = Math.min(8, schools * 4);
@@ -7049,8 +6598,8 @@ export class CitySimulation {
               if (nearestHome) {
                 this.spawnDeathEvent(nearestHome, playAudio);
               } else {
-                const tx = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(p.wx / TILE_SIZE)));
-                const ty = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(p.wy / TILE_SIZE)));
+                const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(p.wx / TILE_SIZE)));
+                const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(p.wy / TILE_SIZE)));
                 this.recordCoordinateDeath(tx, ty, p.wx, p.wy, this.describeArea(tx, ty), playAudio);
               }
               this.people.splice(i, 1);
@@ -7094,7 +6643,6 @@ export class CitySimulation {
           this.warTickAccumulator = 0;
           const targets = this.tiles.filter(
             (t) =>
-              t.isUnlocked &&
               t.terrain !== 'water' &&
               !t.hasRoad &&
               (!t.building || t.building.category !== 'city_hall')
@@ -7187,8 +6735,8 @@ export class CitySimulation {
           if (res !== 'moving') {
             const liveFoe = this.people.find((f) => f.role === 'invader');
             if (liveFoe) {
-              const fx = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(liveFoe.wx / TILE_SIZE)));
-              const fy = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(liveFoe.wy / TILE_SIZE)));
+              const fx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(liveFoe.wx / TILE_SIZE)));
+              const fy = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(liveFoe.wy / TILE_SIZE)));
               if (!this.assignPedestrianRoute(p, fx, fy, liveFoe.wx, liveFoe.wy)) {
                 if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
               }
@@ -7296,8 +6844,8 @@ export class CitySimulation {
                 if (bldOrigin) {
                   this.spawnDeathEvent(bldOrigin, playAudio);
                 } else {
-                  const vtx = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(victim.wx / TILE_SIZE)));
-                  const vty = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(victim.wy / TILE_SIZE)));
+                  const vtx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(victim.wx / TILE_SIZE)));
+                  const vty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(victim.wy / TILE_SIZE)));
                   this.recordCoordinateDeath(vtx, vty, victim.wx, victim.wy, this.describeArea(vtx, vty), playAudio);
                 }
                 this.people.splice(victimIdx, 1);
@@ -7877,9 +7425,7 @@ export class CitySimulation {
       return null;
     }
 
-    const forestCount = this.tiles.filter(
-      (t) => t.isUnlocked && (t.terrain === 'forest' || t.terrain === 'jungle')
-    ).length;
+    const forestCount = this.tiles.filter((t) => t.terrain === 'forest').length;
     const civicReasons = [
       'LOWER CITY TAXES!',
       'FIX TRAFFIC JAMS!',
@@ -8430,7 +7976,7 @@ export class CitySimulation {
 
   private assignPlanterTarget(planter: Person, nearX?: number, nearY?: number): boolean {
     const openGrass = this.tiles.filter(
-      (t) => t.isUnlocked && t.terrain === 'grass' && !t.hasRoad && !t.building
+      (t) => t.terrain === 'grass' && !t.hasRoad && !t.building
     );
     if (openGrass.length === 0) return false;
     const startPt = this.getCurrentWalkableStart(planter.wx, planter.wy);
@@ -8517,9 +8063,7 @@ export class CitySimulation {
       }
     }
 
-    const forestCount = this.tiles.filter(
-      (t) => t.isUnlocked && (t.terrain === 'forest' || t.terrain === 'jungle')
-    ).length;
+    const forestCount = this.tiles.filter((t) => t.terrain === 'forest').length;
 
     // Even if there is no City Hall, citizens naturally replant trees when trees run very low
     if (forestCount <= 5 && this.buildingsList.length > 0) {
@@ -8759,11 +8303,7 @@ export class CitySimulation {
       targetY = h.y;
     } else {
       const spots = this.tiles.filter(
-        (t) =>
-          t.isUnlocked &&
-          !t.hasRoad &&
-          !t.building &&
-          (t.terrain === 'grass' || t.terrain === 'forest' || t.terrain === 'jungle' || t.terrain === 'sand')
+        (t) => !t.hasRoad && !t.building && (t.terrain === 'grass' || t.terrain === 'forest')
       );
       if (spots.length === 0) return;
       const s = spots[Math.floor(Math.random() * spots.length)];
@@ -8820,18 +8360,17 @@ export class CitySimulation {
 
   private startFireAt(x: number, y: number, byArsonist: boolean, playAudio: boolean): FireIncident | null {
     const tile = this.getTile(x, y);
-    if (!tile || !tile.isUnlocked || tile.terrain === 'water' || tile.hasRoad) return null;
+    if (!tile || tile.terrain === 'water' || tile.hasRoad) return null;
     if (this.fires.some((f) => f.x === x && f.y === y && f.status === 'active')) return null;
 
     const isHouse = tile.building?.category === 'residential';
-    const isTreeTile = tile.terrain === 'forest' || tile.terrain === 'jungle';
     const targetType: FireIncident['targetType'] = isHouse
       ? 'house'
-      : isTreeTile
+      : tile.terrain === 'forest'
       ? 'forest'
       : 'grass';
 
-    if (isTreeTile) {
+    if (tile.terrain === 'forest') {
       tile.terrain = 'grass';
     }
 
@@ -9079,14 +8618,11 @@ export class CitySimulation {
       }
     }
 
-    const isFoggy = this.weather === 'Foggy';
     const activeCount = this.crashes.filter((c) => c.status === 'active').length;
-    const maxCrashes = isFoggy ? 2 : 1;
-    if (activeCount >= maxCrashes || this.cars.length < 4) return;
+    if (activeCount >= 1 || this.cars.length < 4) return;
 
     this.crashCheckAccumulator += simDt;
-    const crashCheckInterval = isFoggy ? 40 : 120;
-    if (this.crashCheckAccumulator < crashCheckInterval) return;
+    if (this.crashCheckAccumulator < 120) return;
 
     // 1. Occasional collision when a speeding responder overtakes close civilian traffic
     for (let i = 0; i < this.cars.length; i++) {
@@ -9117,21 +8653,21 @@ export class CitySimulation {
           continue;
         }
         const d = Math.hypot(em.wx - civ.wx, em.wy - civ.wy);
-        if (d > (isFoggy ? 15 : 10.5)) continue;
+        if (d > 10.5) continue;
         const tx = Math.floor(((em.wx + civ.wx) * 0.5) / TILE_SIZE);
         const ty = Math.floor(((em.wy + civ.wy) * 0.5) / TILE_SIZE);
         const tile = this.getTile(tx, ty);
         if (!tile || !tile.hasRoad) continue;
         if (this.crashes.some((c) => Math.abs(c.x - tx) <= 1 && Math.abs(c.y - ty) <= 1)) continue;
         this.crashCheckAccumulator = 0;
-        if (Math.random() < (isFoggy ? 0.42 : 0.14)) {
+        if (Math.random() < 0.14) {
           this.triggerCarCrash(i, j, playAudio, true);
         }
         return;
       }
     }
 
-    // 2. Look for two civilian cars in a tight near-collision (unsignaled intersection, high speed, or heavy fog)
+    // 2. Look for two civilian cars in a tight near-collision (unsignaled intersection or high speed)
     let bestPair: [number, number] | null = null;
     let bestDist = Infinity;
 
@@ -9148,7 +8684,7 @@ export class CitySimulation {
       ) {
         continue;
       }
-      if (a.speed < (isFoggy ? 14 : 20)) continue;
+      if (a.speed < 20) continue;
 
       for (let j = i + 1; j < this.cars.length; j++) {
         const b = this.cars[j];
@@ -9163,10 +8699,10 @@ export class CitySimulation {
         ) {
           continue;
         }
-        if (b.speed < (isFoggy ? 12 : 16)) continue;
+        if (b.speed < 16) continue;
 
         const d = Math.hypot(a.wx - b.wx, a.wy - b.wy);
-        if (d > (isFoggy ? 18.5 : 13.5)) continue;
+        if (d > 13.5) continue;
 
         const midWx = (a.wx + b.wx) * 0.5;
         const midWy = (a.wy + b.wy) * 0.5;
@@ -9180,9 +8716,9 @@ export class CitySimulation {
         const atIntersection = isIntersectionTile(this.tiles, tx, ty);
         const unsignaled = atIntersection && tile.intersection.controlType !== 'signal';
         const isCrossing = headingDot < 0.45;
-        const isFastClose = d < (isFoggy ? 16 : 12) && (a.speed > 30 || b.speed > 30);
+        const isFastClose = d < 12 && (a.speed > 34 || b.speed > 34);
 
-        if ((isFoggy || isCrossing || unsignaled || isFastClose) && d < bestDist) {
+        if ((isCrossing || unsignaled || isFastClose) && d < bestDist) {
           bestDist = d;
           bestPair = [i, j];
         }
@@ -9199,7 +8735,7 @@ export class CitySimulation {
       const tile = this.getTile(tx, ty);
       const unsignaled =
         tile && isIntersectionTile(this.tiles, tx, ty) && tile.intersection.controlType !== 'signal';
-      const chance = isFoggy ? (unsignaled ? 0.48 : 0.34) : (unsignaled ? 0.16 : 0.06);
+      const chance = unsignaled ? 0.16 : 0.06;
       if (Math.random() < chance) {
         this.triggerCarCrash(idxA, idxB, playAudio);
       }
@@ -9220,8 +8756,8 @@ export class CitySimulation {
 
     const wx = (carA.wx + carB.wx) * 0.5;
     const wy = (carA.wy + carB.wy) * 0.5;
-    const tx = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(wx / TILE_SIZE)));
-    const ty = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(wy / TILE_SIZE)));
+    const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(wx / TILE_SIZE)));
+    const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(wy / TILE_SIZE)));
 
     // Reset mission dispatch flags & decrement active trip counters cleanly for the two crashed cars
     for (const crashedCar of [carA, carB]) {
@@ -9468,7 +9004,7 @@ export class CitySimulation {
       if (b.id === car.destBuildingId) {
         b.activeTripsIn = Math.max(0, b.activeTripsIn - 1);
         if (!car.isReturningToStation) {
-          this.adjustBuildingVisits(b, 1);
+          b.totalVisits += 1;
         }
       }
     }
@@ -9836,9 +9372,6 @@ export class CitySimulation {
       activeEscapees: this.people.filter((p) => p.role === 'escapee').length,
       season: this.season,
       weather: this.weather,
-      landExpansionCredits: this.landExpansionCredits,
-      unlockedLandCount: this.tiles.filter((t) => t.isUnlocked).length,
-      nextExpansionDay: (this.expansionMilestonesGranted + 1) * 10,
       chaosCooldowns: {
         virus: Math.ceil(this.chaosCooldowns.virus),
         war: Math.ceil(this.chaosCooldowns.war),
@@ -9866,17 +9399,11 @@ export class CitySimulation {
     if (bestNeighbourhood && bestDist <= 8) {
       return bestNeighbourhood.name;
     }
-    const bounds = this.getUnlockedBounds();
-    const centerX = (bounds.minX + bounds.maxX) * 0.5;
-    const centerY = (bounds.minY + bounds.maxY) * 0.5;
-    const spanX = Math.max(1, bounds.maxX - bounds.minX);
-    const spanY = Math.max(1, bounds.maxY - bounds.minY);
-
-    if (Math.abs(tx - centerX) <= spanX * 0.2 && Math.abs(ty - centerY) <= spanY * 0.2) {
+    if (Math.abs(tx - GRID_COLS / 2) <= 6 && Math.abs(ty - GRID_ROWS / 2) <= 5) {
       return 'Downtown';
     }
-    const ns = ty < bounds.minY + spanY * 0.36 ? 'North' : ty > bounds.minY + spanY * 0.64 ? 'South' : '';
-    const ew = tx < bounds.minX + spanX * 0.36 ? 'West' : tx > bounds.minX + spanX * 0.64 ? 'East' : '';
+    const ns = ty < GRID_ROWS * 0.36 ? 'North' : ty > GRID_ROWS * 0.64 ? 'South' : '';
+    const ew = tx < GRID_COLS * 0.36 ? 'West' : tx > GRID_COLS * 0.64 ? 'East' : '';
     if (ns && ew) return `${ns}-${ew} District`;
     if (ns) return `${ns}side`;
     if (ew) return `${ew}side`;
@@ -9902,65 +9429,6 @@ export class CitySimulation {
     return [...this.dailyHighlights];
   }
 
-  private generateReaderComments(headline: string, summary: string): NewspaperComment[] {
-    const authors = [
-      'Barnaby Higgins',
-      'Auntie Midge',
-      'Sgt. Crumpet',
-      'Mayor’s Goldfish',
-      'Brenda McScone',
-      'Professor Wobbles',
-      'Cousin Gary',
-      'Chef Pickle',
-      'Old Man Turnip',
-      'DJ Toaster',
-      'Nurse Daffodil',
-      'Captain Soggy',
-    ];
-    const moods = ['Baffled', 'Obsessed', 'Furious lol', 'Inspired', 'Suspicious', 'Hungry', 'Screaming'];
-    const weatherQuip =
-      this.weather === 'Foggy'
-        ? 'Could not see my own mailbox in this soup fog, nearly hugged a parking meter.'
-        : this.weather === 'Windy'
-        ? 'The wind blew my toupee onto a passing pigeon and honestly it suits the bird.'
-        : this.weather === 'Rain' || this.weather === 'Storm'
-        ? 'Read this ink-soaked paper under a colander on the porch. 10/10 journalism.'
-        : 'Framed this front page right beside my prize-winning turnip!';
-
-    const hWords = headline.split(/\s+/).filter((w) => w.length > 3);
-    const focusWord = (hWords[Math.floor(Math.random() * hWords.length)] || 'chaos').replace(/[^a-zA-Z0-9'-]/g, '');
-
-    const pool = [
-      `I spit out my lukewarm oatmeal reading "${headline.slice(0, 38)}...". Give the photographer a raise and a helmet!`,
-      `My pet chicken stared at this picture for four straight minutes and immediately started packing a suitcase.`,
-      weatherQuip,
-      `Wait, nobody told me "${focusWord}" was even legal on a ${this.getDayOfWeek()}!`,
-      `The paperboy chucked this newspaper straight into my birdbath at 28 mph. Zero regrets, great read.`,
-      `I zoomed in on the photo looking for my missing left sock. Didn't find it, still mildly entertained.`,
-      `Mayor tried explaining this at the bakery and accidentally buttered his own clipboard.`,
-      `Honestly after reading "${summary.slice(0, 34)}..." I'm moving to the woods with the cows. They pay better taxes.`,
-      `10/10 photo framing. Looks slightly cursed, smells faintly of fresh asphalt and ambition.`,
-      `Why does every wild headline in ${this.mapName} make me want to do 14 jumping jacks out of sheer confusion?`,
-      `My grandma cut this article out and taped it onto the fridge as a warning to the toaster.`,
-      `Is this art? Is this news? Either way I already ordered three extra copies for my suspiciously quiet neighbors.`,
-    ];
-
-    const shuffledAuthors = [...authors].sort(() => Math.random() - 0.5);
-    const shuffledPool = [...pool].sort(() => Math.random() - 0.5);
-    const count = 4 + Math.floor(Math.random() * 2); // 4 or 5 random remarks
-    const comments: NewspaperComment[] = [];
-    for (let i = 0; i < count; i++) {
-      comments.push({
-        id: `cmt_${this.newsIdCounter}_${i}`,
-        author: shuffledAuthors[i % shuffledAuthors.length],
-        mood: moods[Math.floor(Math.random() * moods.length)],
-        text: shuffledPool[i % shuffledPool.length],
-        likes: 3 + Math.floor(Math.random() * 94),
-      });
-    }
-    return comments;
-  }
-
   public publishUserNewspaper(
     headline: string,
     summary: string,
@@ -9968,21 +9436,18 @@ export class CitySimulation {
   ): NewspaperEdition | null {
     if (!this.canPublishTodayPhotoNews()) return null;
     const stats = this.getStats();
-    const finalHeadline = headline.trim() || `${this.getDayOfWeek()} Dispatch from ${this.mapName}`;
-    const finalSummary = summary.trim() || 'Another lively day across town captured on camera.';
     const edition: NewspaperEdition = {
       id: `news_${this.newsIdCounter++}`,
       day: this.dayCount,
       dayOfWeek: this.getDayOfWeek(),
       season: this.season,
       weather: this.weather,
-      headline: finalHeadline,
-      summary: finalSummary,
+      headline: headline.trim() || `${this.getDayOfWeek()} Dispatch from ${this.mapName}`,
+      summary: summary.trim() || 'Another lively day across town captured on camera.',
       highlights: this.dailyHighlights.slice(0, 3),
       publishedAtTime: stats.formattedTime,
       photoDataUrl,
       isUserAuthored: true,
-      readerComments: this.generateReaderComments(finalHeadline, finalSummary),
     };
     this.newspapers.unshift(edition);
     if (this.newspapers.length > 14) this.newspapers.pop();
@@ -9990,28 +9455,19 @@ export class CitySimulation {
     this.unreadNewsCount = 0;
     this.citizenHappiness = Math.min(100, this.citizenHappiness + 2);
     soundEngine.playMarketSale();
-    // Send paperboy out on his bike immediately to deliver this edition to doorsteps!
-    this.spawnPaperboyRoute();
     return edition;
   }
 
   private updateDisasters(simDt: number, realDt: number, playAudio: boolean) {
     // 1. Tornado
     if (this.crises.tornadoActive) {
-      const bounds = this.getUnlockedBounds();
       this.crises.tornadoRemaining = Math.max(0, this.crises.tornadoRemaining - simDt);
       this.crises.tornadoWx += this.tornadoVx * realDt;
       this.crises.tornadoWy += this.tornadoVy * realDt;
-      if (
-        this.crises.tornadoWx < (bounds.minX + 1.5) * TILE_SIZE ||
-        this.crises.tornadoWx > (bounds.maxX - 0.5) * TILE_SIZE
-      ) {
+      if (this.crises.tornadoWx < TILE_SIZE * 2 || this.crises.tornadoWx > (GRID_COLS - 2) * TILE_SIZE) {
         this.tornadoVx *= -1;
       }
-      if (
-        this.crises.tornadoWy < (bounds.minY + 1.5) * TILE_SIZE ||
-        this.crises.tornadoWy > (bounds.maxY - 0.5) * TILE_SIZE
-      ) {
+      if (this.crises.tornadoWy < TILE_SIZE * 2 || this.crises.tornadoWy > (GRID_ROWS - 2) * TILE_SIZE) {
         this.tornadoVy *= -1;
       }
       if (Math.random() < realDt * 12 && this.smokeParticles.length < 180) {
@@ -10026,11 +9482,11 @@ export class CitySimulation {
           color: 'rgba(148, 163, 184, 0.75)',
         });
       }
-      const tx = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(this.crises.tornadoWx / TILE_SIZE)));
-      const ty = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(this.crises.tornadoWy / TILE_SIZE)));
+      const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(this.crises.tornadoWx / TILE_SIZE)));
+      const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(this.crises.tornadoWy / TILE_SIZE)));
       const tile = this.getTile(tx, ty);
-      if (tile && tile.isUnlocked) {
-        if ((tile.terrain === 'forest' || tile.terrain === 'jungle') && Math.random() < simDt * 1.4) {
+      if (tile) {
+        if (tile.terrain === 'forest' && Math.random() < simDt * 1.4) {
           tile.terrain = 'grass';
         }
         if (
@@ -10287,7 +9743,7 @@ export class CitySimulation {
           const res = this.stepPersonAlongPath(p, realDt, 8.5);
           if (res === 'arrived') {
             const home = this.buildingsList.find((b) => b.id === p.homeBuildingId);
-            if (home) this.adjustBuildingVisits(home, 1);
+            if (home) home.totalVisits += 1;
             this.people.splice(i, 1);
           } else if (res === 'blocked' || p.holdTimer <= 0) {
             this.people.splice(i, 1);
@@ -10301,7 +9757,7 @@ export class CitySimulation {
           const res = this.stepPersonAlongPath(p, realDt, 8.5);
           if (res === 'arrived') {
             const sch = this.buildingsList.find((b) => b.id === p.destBuildingId);
-            if (sch) this.adjustBuildingVisits(sch, 1);
+            if (sch) sch.totalVisits += 1;
             this.people.splice(i, 1);
           } else if (res === 'blocked') {
             this.people.splice(i, 1);
@@ -10311,7 +9767,7 @@ export class CitySimulation {
           const res = this.stepPersonAlongPath(p, realDt, 8.5);
           if (res === 'arrived') {
             const home = this.buildingsList.find((b) => b.id === p.homeBuildingId);
-            if (home) this.adjustBuildingVisits(home, 1);
+            if (home) home.totalVisits += 1;
             this.people.splice(i, 1);
           } else if (res === 'blocked' || p.holdTimer <= 0) {
             this.people.splice(i, 1);
@@ -10321,45 +9777,20 @@ export class CitySimulation {
     }
   }
 
-  private pickWeightedAnimalSpawnTile(): MapTile | null {
-    const candidates = this.tiles.filter(
-      (t) =>
-        t.isUnlocked &&
-        (t.terrain === 'grass' || t.terrain === 'forest' || t.terrain === 'jungle' || t.terrain === 'sand') &&
-        !t.hasRoad &&
-        (!t.building || t.building.category === 'park' || t.building.category === 'crops')
-    );
-    if (candidates.length === 0) return null;
-
-    // Heavily favor tree clumps (countAdjacentTrees >= 3) as requested!
-    let totalWeight = 0;
-    const weights = candidates.map((t) => {
-      const trees = this.countAdjacentTrees(t.x, t.y);
-      const w = trees >= 4 ? 14 : trees >= 3 ? 9 : trees >= 1 ? 3 : 1;
-      totalWeight += w;
-      return w;
-    });
-    let r = Math.random() * totalWeight;
-    for (let i = 0; i < candidates.length; i++) {
-      r -= weights[i];
-      if (r <= 0) return candidates[i];
-    }
-    return candidates[candidates.length - 1];
-  }
-
   private seedInitialAnimals() {
-    const firstSpot = this.pickWeightedAnimalSpawnTile();
-    if (!firstSpot) return;
+    const grassOrPark = this.tiles.filter(
+      (t) => t.terrain === 'grass' && !t.hasRoad && (!t.building || t.building.category === 'park' || t.building.category === 'crops')
+    );
+    if (grassOrPark.length === 0) return;
 
     const kinds: AnimalKind[] = ['bird', 'bird', 'bird', 'cow', 'cow', 'pig', 'pig', 'chicken', 'chicken'];
     const crops = this.buildingsList.filter((b) => b.category === 'crops');
     for (const kind of kinds) {
-      const nearCrop = crops.length > 0 && kind !== 'bird' && Math.random() < 0.45;
-      const crop = crops[Math.floor(Math.random() * crops.length)];
-      const spot =
-        (nearCrop && crop ? this.getTile(crop.x, crop.y) : null) ||
-        this.pickWeightedAnimalSpawnTile() ||
-        firstSpot;
+      const nearCrop = crops.length > 0 && kind !== 'bird' && Math.random() < 0.7;
+      const spot = nearCrop
+        ? this.getTile(crops[Math.floor(Math.random() * crops.length)].x, crops[Math.floor(Math.random() * crops.length)].y) ||
+          grassOrPark[Math.floor(Math.random() * grassOrPark.length)]
+        : grassOrPark[Math.floor(Math.random() * grassOrPark.length)];
       const wx = (spot.x + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 14;
       const wy = (spot.y + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 14;
       this.animals.push({
@@ -10393,18 +9824,18 @@ export class CitySimulation {
       }
     }
 
-    // 2. Replenish animals up to 14 naturally, biased strongly toward tree clumps
+    // 2. Replenish animals up to 12 naturally
     this.animalSpawnAccumulator += simDt;
-    if (this.animalSpawnAccumulator >= 8 && this.animals.length < 14) {
+    if (this.animalSpawnAccumulator >= 8 && this.animals.length < 12) {
       this.animalSpawnAccumulator = 0;
-      const spot = this.pickWeightedAnimalSpawnTile();
-      if (spot) {
-        const treesNearby = this.countAdjacentTrees(spot.x, spot.y);
+      const spots = this.tiles.filter(
+        (t) => t.terrain === 'grass' && !t.hasRoad && (!t.building || t.building.category === 'park' || t.building.category === 'crops')
+      );
+      if (spots.length > 0) {
+        const spot = spots[Math.floor(Math.random() * spots.length)];
         const birdsCount = this.animals.filter((a) => a.kind === 'bird').length;
         const kind: AnimalKind =
-          treesNearby >= 3 && Math.random() < 0.55
-            ? (['bird', 'pig', 'cow'][Math.floor(Math.random() * 3)] as AnimalKind)
-            : birdsCount < 4
+          birdsCount < 4
             ? 'bird'
             : (['cow', 'pig', 'chicken', 'bird'][Math.floor(Math.random() * 4)] as AnimalKind);
         const wx = (spot.x + 0.5) * TILE_SIZE;
@@ -10425,13 +9856,7 @@ export class CitySimulation {
       }
     }
 
-    // 3. Step Animal movement & grazing within unlocked bounds
-    const bounds = this.getUnlockedBounds();
-    const minWx = bounds.minX * TILE_SIZE + 16;
-    const maxWx = (bounds.maxX + 1) * TILE_SIZE - 16;
-    const minWy = bounds.minY * TILE_SIZE + 16;
-    const maxWy = (bounds.maxY + 1) * TILE_SIZE - 16;
-
+    // 3. Step Animal movement & grazing
     for (const ani of this.animals) {
       ani.animPhase += realDt * (ani.state === 'flying' ? 12 : 4.5);
       ani.holdTimer -= realDt;
@@ -10439,16 +9864,8 @@ export class CitySimulation {
         if (ani.holdTimer <= 0) {
           ani.state = ani.kind === 'bird' && Math.random() < 0.65 ? 'flying' : 'roaming';
           const range = ani.kind === 'bird' ? 110 : 54;
-          const candX = Math.max(minWx, Math.min(maxWx, ani.wx + (Math.random() - 0.5) * range));
-          const candY = Math.max(minWy, Math.min(maxWy, ani.wy + (Math.random() - 0.5) * range));
-          const t = this.getTile(Math.floor(candX / TILE_SIZE), Math.floor(candY / TILE_SIZE));
-          if (t && t.isUnlocked && (ani.kind === 'bird' || t.terrain !== 'water')) {
-            ani.targetWx = candX;
-            ani.targetWy = candY;
-          } else {
-            ani.targetWx = ani.wx;
-            ani.targetWy = ani.wy;
-          }
+          ani.targetWx = Math.max(24, Math.min(GRID_COLS * TILE_SIZE - 24, ani.wx + (Math.random() - 0.5) * range));
+          ani.targetWy = Math.max(24, Math.min(GRID_ROWS * TILE_SIZE - 24, ani.wy + (Math.random() - 0.5) * range));
           ani.holdTimer = 3 + Math.random() * 3;
         }
       } else {
@@ -10513,8 +9930,8 @@ export class CitySimulation {
       if (livestock.length > 2 && shops.length > 0 && activeButchers < 1) {
         const prey = livestock[Math.floor(Math.random() * livestock.length)];
         const orig = shops[Math.floor(Math.random() * shops.length)];
-        const ptx = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(prey.wx / TILE_SIZE)));
-        const pty = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(prey.wy / TILE_SIZE)));
+        const ptx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(prey.wx / TILE_SIZE)));
+        const pty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(prey.wy / TILE_SIZE)));
         const path = findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: ptx, y: pty });
         if (path) {
           this.people.push({
@@ -10645,8 +10062,8 @@ export class CitySimulation {
     if (candidates.length === 0 || Math.random() > 0.62) return;
 
     const litterer = candidates[Math.floor(Math.random() * candidates.length)];
-    const tx = Math.max(0, Math.min(WORLD_COLS - 1, Math.floor(litterer.wx / TILE_SIZE)));
-    const ty = Math.max(0, Math.min(WORLD_ROWS - 1, Math.floor(litterer.wy / TILE_SIZE)));
+    const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(litterer.wx / TILE_SIZE)));
+    const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(litterer.wy / TILE_SIZE)));
 
     const dirs = [
       { dx: 1, dy: 0 },
@@ -10657,7 +10074,7 @@ export class CitySimulation {
     let waterTile: MapTile | null = null;
     for (const d of dirs) {
       const nt = this.getTile(tx + d.dx, ty + d.dy);
-      if (nt && nt.isUnlocked && nt.terrain === 'water' && !nt.hasRoad && !nt.hasFootbridge) {
+      if (nt && nt.terrain === 'water' && !nt.hasRoad && !nt.hasFootbridge) {
         waterTile = nt;
         break;
       }
@@ -10688,7 +10105,7 @@ export class CitySimulation {
       });
     } else {
       const curTile = this.getTile(tx, ty);
-      if (curTile && curTile.isUnlocked && (curTile.terrain === 'grass' || curTile.terrain === 'sand') && !curTile.building) {
+      if (curTile && curTile.terrain === 'grass' && !curTile.building) {
         this.trashItems.push({
           id: `tr_${this.trashIdCounter++}`,
           x: curTile.x,
@@ -10750,8 +10167,7 @@ export class CitySimulation {
               activity === 'rowing' ? '#B45309' : activity === 'swim' ? '#0284C7' : '#0891B2';
 
             if (
-              spot.tile.isUnlocked &&
-              (spot.tile.terrain === 'grass' || spot.tile.terrain === 'sand') &&
+              spot.tile.terrain === 'grass' &&
               !spot.tile.building &&
               !this.marketStalls.some((s) => s.x === spot.tile.x && s.y === spot.tile.y) &&
               this.marketStalls.length < 7 &&
@@ -10857,7 +10273,6 @@ export class CitySimulation {
         if (Math.random() < 0.42) {
           const openLots = this.tiles.filter(
             (t) =>
-              t.isUnlocked &&
               t.terrain === 'grass' &&
               !t.hasRoad &&
               !t.building &&
@@ -10997,14 +10412,7 @@ export class CitySimulation {
               const pickId = bpIds[Math.floor(Math.random() * bpIds.length)];
               const bp = this.getAllBlueprints().find((b) => b.id === pickId);
               const targetTile = this.getTile(p.targetTileX, p.targetTileY);
-              if (
-                bp &&
-                targetTile &&
-                targetTile.isUnlocked &&
-                (targetTile.terrain === 'grass' || targetTile.terrain === 'sand') &&
-                !targetTile.hasRoad &&
-                !targetTile.building
-              ) {
+              if (bp && targetTile && targetTile.terrain === 'grass' && !targetTile.hasRoad && !targetTile.building) {
                 const placed = this.placeBuilding(p.targetTileX, p.targetTileY, bp);
                 if (placed) {
                   this.floatingLabels.push({

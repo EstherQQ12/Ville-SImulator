@@ -702,7 +702,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'school',
     iconGrid: SCHOOL_ART,
     accentColor: '#D97706',
-    capacity: 100,
+    capacity: 45,
   },
   {
     id: 'hospital',
@@ -710,7 +710,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'hospital',
     iconGrid: HOSPITAL_ART,
     accentColor: '#DC2626',
-    capacity: 60,
+    capacity: 40,
   },
   {
     id: 'police',
@@ -726,7 +726,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'jail',
     iconGrid: JAIL_ART,
     accentColor: '#475569',
-    capacity: 25,
+    capacity: 24,
   },
   {
     id: 'fire_station',
@@ -734,7 +734,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'fire_station',
     iconGrid: FIRE_STATION_ART,
     accentColor: '#DC2626',
-    capacity: 25,
+    capacity: 26,
   },
   {
     id: 'cemetery',
@@ -750,7 +750,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'workplace',
     iconGrid: OFFICE_ART,
     accentColor: '#0284C7',
-    capacity: 50,
+    capacity: 38,
   },
   {
     id: 'factory',
@@ -758,7 +758,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'factory',
     iconGrid: FACTORY_ART,
     accentColor: '#D97706',
-    capacity: 60,
+    capacity: 42,
   },
   {
     id: 'crops',
@@ -766,7 +766,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'crops',
     iconGrid: CROPS_ART,
     accentColor: '#CA8A04',
-    capacity: 12,
+    capacity: 22,
   },
   {
     id: 'market',
@@ -774,7 +774,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'commercial',
     iconGrid: MARKET_ART,
     accentColor: '#EA580C',
-    capacity: 35,
+    capacity: 28,
   },
   {
     id: 'bakery',
@@ -782,7 +782,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'commercial',
     iconGrid: BAKERY_ART,
     accentColor: '#EA580C',
-    capacity: 20,
+    capacity: 18,
   },
   {
     id: 'cafe',
@@ -790,7 +790,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'visit_spot',
     iconGrid: CAFE_ART,
     accentColor: '#92400E',
-    capacity: 25,
+    capacity: 20,
   },
   {
     id: 'bookshop',
@@ -798,7 +798,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'visit_spot',
     iconGrid: BOOKSHOP_ART,
     accentColor: '#0284C7',
-    capacity: 20,
+    capacity: 16,
   },
   {
     id: 'flower_shop',
@@ -806,7 +806,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'commercial',
     iconGrid: FLOWER_SHOP_ART,
     accentColor: '#EC4899',
-    capacity: 18,
+    capacity: 16,
   },
   {
     id: 'tackle_shop',
@@ -814,7 +814,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'commercial',
     iconGrid: TACKLE_SHOP_ART,
     accentColor: '#0EA5E9',
-    capacity: 18,
+    capacity: 14,
   },
   {
     id: 'park',
@@ -822,7 +822,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'park',
     iconGrid: PARK_ART,
     accentColor: '#16A34A',
-    capacity: 30,
+    capacity: 18,
   },
 ];
 
@@ -1175,249 +1175,6 @@ function buildBlankPreset(): SavedMapData {
     id: 'preset_blank',
     name: 'Blank Valley',
     subtitle: 'Open grassy terrain ready for your custom roads & icons',
-    updatedAt: Date.now(),
-    tiles,
-    customBlueprints: [],
-  };
-}
-
-export type MapBiomeType = 'valley' | 'islands' | 'jungle' | 'river' | 'pond';
-
-export const MAP_BIOME_INFO: { id: MapBiomeType; label: string; desc: string }[] = [
-  { id: 'valley', label: 'Green Valley', desc: 'Lush meadows, forest groves & gentle farmland' },
-  { id: 'islands', label: 'Isolated Sand Islands', desc: 'Sandy coral islands across turquoise bays' },
-  { id: 'jungle', label: 'Tropical Jungle', desc: 'Dense canopy clumps teeming with wildlife' },
-  { id: 'river', label: 'Central River', desc: 'Wide river down the middle with twin crossings' },
-  { id: 'pond', label: 'Meadow & Pond', desc: 'Tranquil central pond ringed by parklands' },
-];
-
-export function generateCustomBiomeMap(name: string, biome: MapBiomeType): SavedMapData {
-  const tiles = createEmptyTiles();
-  const idx = (x: number, y: number) => y * GRID_COLS + x;
-  let seq = 1;
-
-  const setT = (x: number, y: number, terrain: TerrainType) => {
-    if (x < 0 || x >= GRID_COLS || y < 0 || y >= GRID_ROWS) return;
-    tiles[idx(x, y)].terrain = terrain;
-  };
-
-  const setRoad = (x: number, y: number) => {
-    if (x < 0 || x >= GRID_COLS || y < 0 || y >= GRID_ROWS) return;
-    const t = tiles[idx(x, y)];
-    t.hasRoad = true;
-    t.intersection = { controlType: 'signal', cycleDuration: 18, phaseOffset: (x + y) % 8 };
-  };
-
-  const place = (bpId: string, x: number, y: number, customName?: string) => {
-    if (x < 0 || x >= GRID_COLS || y < 0 || y >= GRID_ROWS) return;
-    const t = tiles[idx(x, y)];
-    if (t.terrain === 'water') t.terrain = 'grass';
-    t.hasRoad = false;
-    t.building = makeBuilding(bpId, x, y, seq++, customName);
-  };
-
-  const clumpTrees = (cx: number, cy: number, radius: number, treeType: 'forest' | 'jungle') => {
-    for (let dy = -radius; dy <= radius; dy++) {
-      for (let dx = -radius; dx <= radius; dx++) {
-        if (dx * dx + dy * dy <= radius * radius + 0.5) {
-          const tx = cx + dx;
-          const ty = cy + dy;
-          if (tx >= 0 && tx < GRID_COLS && ty >= 0 && ty < GRID_ROWS) {
-            const t = tiles[idx(tx, ty)];
-            if (!t.hasRoad && !t.building && t.terrain !== 'water') {
-              t.terrain = treeType;
-            }
-          }
-        }
-      }
-    }
-  };
-
-  if (biome === 'islands') {
-    for (let y = 0; y < GRID_ROWS; y++) {
-      for (let x = 0; x < GRID_COLS; x++) {
-        setT(x, y, 'water');
-      }
-    }
-    const islands: { cx: number; cy: number; rx: number; ry: number; lush?: boolean }[] = [
-      { cx: 7, cy: 6, rx: 4.4, ry: 3.6, lush: true },
-      { cx: 18, cy: 11, rx: 5.4, ry: 4.3, lush: true },
-      { cx: 28, cy: 5, rx: 3.8, ry: 3.1 },
-      { cx: 7, cy: 16, rx: 3.9, ry: 3.1 },
-      { cx: 27, cy: 16, rx: 4.2, ry: 3.4, lush: true },
-    ];
-    for (const isl of islands) {
-      for (let y = 0; y < GRID_ROWS; y++) {
-        for (let x = 0; x < GRID_COLS; x++) {
-          const norm = ((x - isl.cx) / isl.rx) ** 2 + ((y - isl.cy) / isl.ry) ** 2;
-          if (norm <= 1.0) {
-            setT(x, y, norm > 0.62 ? 'sand' : 'grass');
-          }
-        }
-      }
-    }
-    // Starter main town on central island + sandy cove footbridge
-    for (let x = 15; x <= 21; x++) setRoad(x, 11);
-    for (let y = 9; y <= 13; y++) setRoad(18, y);
-    // Bridge linking NW island to central island
-    for (let x = 10; x <= 15; x++) {
-      if (tiles[idx(x, 9)].terrain === 'water') {
-        tiles[idx(x, 9)].hasFootbridge = true;
-      }
-    }
-    clumpTrees(6, 5, 1, 'jungle');
-    clumpTrees(27, 15, 1, 'jungle');
-    place('city_hall', 18, 8, 'Atoll City Hall');
-    place('house', 16, 10, 'Lagoon Cottage');
-    place('house', 17, 10, 'Palm Villa');
-    place('house', 19, 10, 'Coral Home');
-    place('market', 20, 10, 'Harbor Market');
-    place('tackle_shop', 15, 12, 'Reef Tackle Shop');
-    place('school', 19, 12, 'Island Academy');
-    place('park', 17, 12, 'Shell Playground');
-    place('house', 7, 6, 'West Cay Cottage');
-    place('house', 27, 16, 'South Cay Bungalow');
-  } else if (biome === 'jungle') {
-    for (let y = 0; y < GRID_ROWS; y++) {
-      for (let x = 0; x < GRID_COLS; x++) {
-        const riverCurve = 25 + Math.round(Math.sin(y * 0.4) * 2);
-        if (Math.abs(x - riverCurve) <= 1) {
-          setT(x, y, 'water');
-        } else if (Math.abs(x - riverCurve) === 2 && (x + y) % 3 === 0) {
-          setT(x, y, 'sand');
-        }
-      }
-    }
-    // Dense overlapping jungle clumps
-    const jungleClumps: [number, number, number][] = [
-      [4, 4, 3],
-      [9, 3, 2],
-      [4, 15, 3],
-      [11, 17, 2],
-      [20, 4, 2],
-      [30, 5, 2],
-      [30, 16, 3],
-      [18, 17, 2],
-    ];
-    for (const [cx, cy, r] of jungleClumps) {
-      clumpTrees(cx, cy, r, 'jungle');
-    }
-    // Clearing road loop
-    for (let x = 11; x <= 21; x++) {
-      setRoad(x, 9);
-      setRoad(x, 13);
-    }
-    for (let y = 9; y <= 13; y++) {
-      setRoad(11, y);
-      setRoad(21, y);
-    }
-    place('city_hall', 16, 8, 'Rainforest Hall');
-    place('house', 12, 8, 'Canopy Cottage');
-    place('house', 13, 8, 'Fern Villa');
-    place('house', 14, 8, 'Toucan House');
-    place('school', 18, 8, 'Jungle School');
-    place('market', 13, 10, 'Mango Market');
-    place('park', 15, 10, 'Treetop Park');
-    place('crops', 18, 10, 'Cocoa Farm');
-    place('hospital', 19, 12, 'Canopy Clinic');
-    place('police', 13, 12, 'Ranger Station');
-  } else if (biome === 'river') {
-    // Wide central river running N-S right down x = 15..18 with twin sandy banks & bridges
-    for (let y = 0; y < GRID_ROWS; y++) {
-      const meander = Math.round(Math.sin(y * 0.35) * 1.2);
-      for (let x = 15 + meander; x <= 18 + meander; x++) {
-        setT(x, y, 'water');
-      }
-      if ((14 + meander) >= 0) setT(14 + meander, y, (y % 2 === 0 ? 'sand' : 'grass'));
-      if ((19 + meander) < GRID_COLS) setT(19 + meander, y, (y % 2 === 1 ? 'sand' : 'grass'));
-    }
-    for (let x = 6; x <= 27; x++) {
-      setRoad(x, 7);
-      setRoad(x, 14);
-    }
-    for (let y = 5; y <= 16; y++) {
-      setRoad(9, y);
-      setRoad(24, y);
-    }
-    clumpTrees(4, 4, 2, 'forest');
-    clumpTrees(5, 17, 2, 'forest');
-    clumpTrees(29, 4, 2, 'forest');
-    clumpTrees(29, 17, 2, 'forest');
-    place('city_hall', 23, 6, 'Riverfront Hall');
-    place('house', 7, 6);
-    place('house', 8, 6);
-    place('house', 10, 6);
-    place('house', 7, 13);
-    place('school', 10, 13, 'Westbank School');
-    place('market', 22, 13, 'River Market');
-    place('office', 25, 6, 'Pier Office');
-    place('hospital', 25, 13, 'Riverbend Medical');
-    place('park', 22, 8, 'Riverwalk Park');
-    place('crops', 6, 10, 'Valley Farm');
-  } else if (biome === 'pond') {
-    // Tranquil central oval pond
-    for (let y = 0; y < GRID_ROWS; y++) {
-      for (let x = 0; x < GRID_COLS; x++) {
-        const d = ((x - 16.5) / 4.2) ** 2 + ((y - 10.5) / 2.8) ** 2;
-        if (d <= 1.0) {
-          setT(x, y, 'water');
-        } else if (d <= 1.35 && (x + y) % 2 === 0) {
-          setT(x, y, 'sand');
-        }
-      }
-    }
-    for (let x = 10; x <= 23; x++) {
-      setRoad(x, 6);
-      setRoad(x, 15);
-    }
-    for (let y = 6; y <= 15; y++) {
-      setRoad(10, y);
-      setRoad(23, y);
-    }
-    clumpTrees(5, 5, 2, 'forest');
-    clumpTrees(28, 5, 2, 'forest');
-    clumpTrees(5, 16, 2, 'forest');
-    clumpTrees(28, 16, 2, 'forest');
-    place('city_hall', 16, 5, 'Lakeside Hall');
-    place('house', 12, 5);
-    place('house', 13, 5);
-    place('house', 14, 5);
-    place('house', 12, 16);
-    place('school', 19, 5, 'Pondview School');
-    place('park', 16, 16, 'Duck Pond Park');
-    place('tackle_shop', 21, 10, 'Pond Bait Shop');
-    place('market', 14, 16, 'Meadow Market');
-    place('crops', 7, 10, 'Clover Farm');
-  } else {
-    // Classic customizable green valley with starter town & dense forest clumps
-    for (let x = 8; x <= 25; x++) {
-      setRoad(x, 10);
-      setRoad(x, 14);
-    }
-    for (let y = 7; y <= 16; y++) {
-      setRoad(12, y);
-      setRoad(21, y);
-    }
-    clumpTrees(5, 5, 2, 'forest');
-    clumpTrees(28, 5, 2, 'forest');
-    clumpTrees(5, 17, 2, 'forest');
-    clumpTrees(28, 17, 2, 'forest');
-    place('city_hall', 16, 9, `${name.trim() || 'Valley'} City Hall`);
-    place('house', 10, 9);
-    place('house', 11, 9);
-    place('house', 13, 9);
-    place('house', 10, 13);
-    place('school', 18, 9, 'Valley School');
-    place('market', 15, 13, 'Town Market');
-    place('park', 17, 13, 'Meadow Park');
-    place('crops', 23, 13, 'Sunlit Farm');
-    place('hospital', 22, 9, 'Valley Clinic');
-  }
-
-  return {
-    id: `custom_${biome}_${Date.now().toString(36)}`,
-    name: name.trim() || 'Custom City',
-    subtitle: `${MAP_BIOME_INFO.find((b) => b.id === biome)?.label || 'Custom'} · Ready to grow`,
     updatedAt: Date.now(),
     tiles,
     customBlueprints: [],

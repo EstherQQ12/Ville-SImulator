@@ -1,10 +1,5 @@
 export const GRID_COLS = 34;
 export const GRID_ROWS = 22;
-export const WORLD_COLS = 58;
-export const WORLD_ROWS = 46;
-export const CORE_OFFSET_X = 12;
-export const CORE_OFFSET_Y = 12;
-export const EXPANSION_CHUNK = 187; // quarter of default 34x22 (748) land every 10 days
 export const TILE_SIZE = 48;
 export const ICON_SIZE = 20;
 
@@ -19,9 +14,6 @@ export type ToolMode =
   | 'plot'
   | 'water'
   | 'forest'
-  | 'sand'
-  | 'jungle'
-  | 'land'
   | 'bulldoze'
   | 'camera';
 
@@ -43,7 +35,7 @@ export type BuildingCategory =
   | 'crops'
   | 'park';
 
-export type TerrainType = 'grass' | 'sand' | 'water' | 'forest' | 'jungle';
+export type TerrainType = 'grass' | 'water' | 'forest';
 
 export type TimePhase = 'Dawn' | 'Day' | 'Dusk' | 'Night';
 
@@ -551,8 +543,6 @@ export interface MapTile {
   x: number;
   y: number;
   terrain: TerrainType;
-  isUnlocked: boolean;
-  isDefaultLand: boolean;
   hasRoad: boolean;
   hasZebraCrossing?: boolean;
   hasFootbridge?: boolean;
@@ -648,11 +638,6 @@ export interface PorchPaperProp {
   maxAge?: number;
 }
 
-export interface NewspaperComment {
-  author: string;
-  text: string;
-}
-
 export interface NewspaperEdition {
   id: string;
   day: number;
@@ -665,7 +650,6 @@ export interface NewspaperEdition {
   publishedAtTime: string;
   photoDataUrl?: string;
   isUserAuthored?: boolean;
-  readerComments?: NewspaperComment[];
 }
 
 export interface HonkRipple {
@@ -737,9 +721,6 @@ export interface SimulationStats {
   tornadoActive: boolean;
   earthquakeActive: boolean;
   floodActive: boolean;
-  landExpansionCredits: number;
-  unlockedLandCount: number;
-  nextExpansionDay: number;
 }
 
 export interface SavedMapData {
@@ -747,17 +728,10 @@ export interface SavedMapData {
   name: string;
   subtitle: string;
   updatedAt: number;
-  version?: number;
-  worldCols?: number;
-  worldRows?: number;
-  landExpansionCredits?: number;
-  expansionMilestonesGranted?: number;
   tiles: {
     x: number;
     y: number;
     terrain: TerrainType;
-    isUnlocked?: boolean;
-    isDefaultLand?: boolean;
     hasRoad: boolean;
     hasZebraCrossing?: boolean;
     hasFootbridge?: boolean;
