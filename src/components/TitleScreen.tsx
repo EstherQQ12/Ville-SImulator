@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, X } from 'lucide-react';
-import { PRESET_MAPS } from '../data/defaultBlueprints';
-import { SavedMapData } from '../types/game';
+import { BookOpen, Compass, X } from 'lucide-react';
+import { BIOME_TEMPLATES, PRESET_MAPS } from '../data/defaultBlueprints';
+import { MapTemplateKind, SavedMapData } from '../types/game';
 
 interface TitleScreenProps {
   selectedPresetId: string;
   savedMaps: SavedMapData[];
   onSelectMap: (map: SavedMapData) => void;
+  onCreateBiomeMap: (template: MapTemplateKind) => void;
   onStartGame: () => void;
 }
 
@@ -14,9 +15,12 @@ export function TitleScreen({
   selectedPresetId,
   savedMaps,
   onSelectMap,
+  onCreateBiomeMap,
   onStartGame,
 }: TitleScreenProps) {
   const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [tab, setTab] = useState<'scenarios' | 'biomes'>('scenarios');
+  const [selectedBiome, setSelectedBiome] = useState<MapTemplateKind | null>(null);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -92,35 +96,101 @@ export function TitleScreen({
             </svg>
 
             <p className="text-sm md:text-base text-slate-300 leading-relaxed max-w-md">
-              Build living towns, paint custom buildings, watch weekday schools &amp; farm life unfold, snap daily news photos, and weather chaos.
+              Build living towns, shape islands or jungles, grow cities every 10 days, snap &amp; crop daily news photos, and weather chaos.
             </p>
           </div>
 
           {/* Starting Map Selection */}
-          <div className="flex flex-col gap-2">
-            <div className="text-xs font-medium text-slate-400">
-              Select Starting Map
+          <div className="flex flex-col gap-2.5 max-w-md">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-400">Select Starting World</span>
+              <div className="flex items-center gap-1 p-0.5 rounded-lg bg-slate-900/90 border border-slate-700/80">
+                <button
+                  type="button"
+                  onClick={() => setTab('scenarios')}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${
+                    tab === 'scenarios'
+                      ? 'bg-amber-400 text-slate-950'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Towns &amp; Saves
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTab('biomes')}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${
+                    tab === 'biomes'
+                      ? 'bg-emerald-400 text-slate-950'
+                      : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  <Compass className="w-3 h-3" />
+                  New Biome
+                </button>
+              </div>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-w-md">
-              {allMaps.slice(0, 4).map((m) => {
-                const active = m.id === selectedPresetId;
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    onClick={() => onSelectMap(m)}
-                    className={`text-left p-3 rounded-lg border transition-colors ${
-                      active
-                        ? 'bg-slate-800/95 border-amber-400 text-white'
-                        : 'bg-slate-900/80 border-slate-700/70 text-slate-300 hover:border-slate-500 hover:bg-slate-800/70'
-                    }`}
-                  >
-                    <div className="text-sm font-semibold truncate">{m.name}</div>
-                    <div className="text-xs text-slate-400 truncate mt-0.5">{m.subtitle}</div>
-                  </button>
-                );
-              })}
-            </div>
+
+            {tab === 'scenarios' ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {allMaps.slice(0, 6).map((m) => {
+                  const active = m.id === selectedPresetId && selectedBiome === null;
+                  const cleanSubtitle = m.subtitle.replace(/^Day\s+\d+\s*·\s*/i, '');
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedBiome(null);
+                        onSelectMap(m);
+                      }}
+                      className={`text-left p-3 rounded-lg border transition-colors ${
+                        active
+                          ? 'bg-slate-800/95 border-amber-400 text-white'
+                          : 'bg-slate-900/80 border-slate-700/70 text-slate-300 hover:border-slate-500 hover:bg-slate-800/70'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="text-sm font-semibold truncate">{m.name}</span>
+                      </div>
+                      <div className="text-xs text-slate-400 truncate mt-0.5">{cleanSubtitle}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {BIOME_TEMPLATES.map((tpl) => {
+                  const active = selectedBiome === tpl.id;
+                  return (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedBiome(tpl.id);
+                        onCreateBiomeMap(tpl.id);
+                      }}
+                      className={`text-left p-2.5 rounded-lg border transition-colors ${
+                        active
+                          ? 'bg-slate-800/95 border-emerald-400 text-white'
+                          : 'bg-slate-900/80 border-slate-700/70 text-slate-300 hover:border-slate-500 hover:bg-slate-800/70'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-semibold">
+                        <span
+                          className="w-2.5 h-2.5 rounded-sm shrink-0"
+                          style={{ backgroundColor: tpl.accent }}
+                        />
+                        <span className="truncate">{tpl.name}</span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 line-clamp-2 mt-1">
+                        {tpl.description}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Primary CTA & Guide Book */}
@@ -144,7 +214,7 @@ export function TitleScreen({
 
           {/* Single flat control-hint line */}
           <div className="pt-2 border-t border-slate-800/80 text-xs text-slate-400 font-mono-tabular">
-            Slide Paint Plots &amp; Roads · Hover Cars for Destinations · C Photo News · Space Pause
+            Slide Paint Plots · L Expand Land · F Find Places · News Photo &amp; Paperboy · Space Pause
           </div>
         </div>
       </div>
@@ -173,30 +243,30 @@ export function TitleScreen({
 
             <div className="p-5 overflow-y-auto touch-pan-y space-y-3.5 text-xs leading-relaxed text-slate-300">
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-amber-300 mb-1">1. Build &amp; Paint Your Town</div>
+                <div className="font-semibold text-amber-300 mb-1">1. Biomes &amp; 10-Day Map Expansion</div>
                 <p>
-                  Select any plot or terrain tool and click or slide across tiles to paint buildings, roads, rivers, parks (randomly a playground, garden, or field), and crops. Use the Paintbrush button to draw your own 20×20 pixel buildings.
+                  Play prebuilt cities or create a Valley, Sandy Island, Isolated Islands, Jungle, River, or Pond. Every 10 days (Day 10, 20, 30...), you unlock 100 boxes of custom Land (press L) to expand wherever you wish!
                 </p>
               </div>
 
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-sky-300 mb-1">2. Daily Schedule, Schools &amp; Traffic</div>
+                <div className="font-semibold text-sky-300 mb-1">2. Daily Schedule, Stores &amp; Foggy Traffic</div>
                 <p>
-                  The town follows a real 7-day week. Schools open Mon–Fri from 08:00 to 16:00 with a school bell, parents dropping off/picking up kids, and school buses. Hover any car to see its live destination!
+                  Schools hold up to 100 students Mon–Fri (08:00–16:00), and stores open 06:00–22:00 before closing at night. Watch out on occasional Foggy days when cars crash more often!
                 </p>
               </div>
 
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-emerald-300 mb-1">3. Farms, Animals &amp; Citizens</div>
+                <div className="font-semibold text-emerald-300 mb-1">3. Clustered Woods, Map Finder &amp; Smooth Refresh</div>
                 <p>
-                  Houses hold up to 5 citizens. Farmers tend growing crops, while cows, pigs, chickens, and birds roam meadows as butchers keep markets supplied. Click any building to see how many people are inside.
+                  Clumps of forest trees spawn cows, pigs, chickens, and birds. Use the Map button beside News to jump to any place, and press Refresh anytime to clear heavy lag without restarting your town.
                 </p>
               </div>
 
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-amber-300 mb-1">4. Daily Photojournalism</div>
+                <div className="font-semibold text-amber-300 mb-1">4. News Photo Cropper, Paperboy &amp; Reader Remarks</div>
                 <p>
-                  Once each game day, pick the Camera tool (or press C), click anywhere in town to snap a photo, then write your own headline and story for the town newspaper!
+                  Open News once per day to take a high-res photo, crop your frame, write the headline, and publish! A bicycling paperboy delivers papers to houses as funny citizen comments roll in.
                 </p>
               </div>
 
@@ -223,4 +293,3 @@ export function TitleScreen({
     </div>
   );
 }
-

@@ -1,5 +1,6 @@
 import { DEFAULT_BLUEPRINTS, PRESET_MAPS } from '../data/defaultBlueprints';
 import {
+  ActiveConstruction,
   Animal,
   AnimalKind,
   BlastCrater,
@@ -15,6 +16,7 @@ import {
   CityEvent,
   CityEventType,
   ConfettiParticle,
+  ConstructionProposal,
   CrashIncident,
   CrisisType,
   DeathEvent,
@@ -31,15 +33,18 @@ import {
   MarketStall,
   MayorSpeech,
   Neighbourhood,
+  NewspaperComment,
   NewspaperEdition,
   NukeBlast,
   ParkVariant,
   Person,
   PlacedBuilding,
+  PorchPaperProp,
   ProtestIncident,
   RoadIntersectionConfig,
   RobberyIncident,
   SavedMapData,
+  SavedSimState,
   SeasonType,
   SimulationStats,
   SleepZzzParticle,
@@ -57,14 +62,14 @@ import {
 } from '../types/game';
 import { soundEngine } from '../utils/sound';
 import {
-  findAdjacentRoadTile,
-  findNearestWalkableTile,
-  findPedestrianPath,
-  findRoadPath,
-  getRoadNeighbors,
-  inBounds,
+  findAdjacentRoadTile as pfFindAdjacentRoadTile,
+  findNearestWalkableTile as pfFindNearestWalkableTile,
+  findPedestrianPath as pfFindPedestrianPath,
+  findRoadPath as pfFindRoadPath,
+  getRoadNeighbors as pfGetRoadNeighbors,
+  inBounds as pfInBounds,
   isHighwayTile,
-  isIntersectionTile,
+  isIntersectionTile as pfIsIntersectionTile,
   isPedestrianTileWalkable,
 } from './pathfinding';
 
@@ -135,7 +140,15 @@ export class CitySimulation {
   public snowmen: SnowmanProp[] = [];
   public brokenBridges: BrokenBridgeIncident[] = [];
   public trashItems: TrashItem[] = [];
+  public gridCols = GRID_COLS;
+  public gridRows = GRID_ROWS;
+  public expansionCredits = 0;
+  public lastExpansionMilestone = 0;
+  public porchPapers: PorchPaperProp[] = [];
+  private pendingCameraShift: { dx: number; dy: number } | null = null;
   public animals: Animal[] = [];
+  public pendingProposals: ConstructionProposal[] = [];
+  public activeConstructions: ActiveConstruction[] = [];
   public newspapers: NewspaperEdition[] = [];
   public unreadNewsCount = 0;
   public dailyHighlights: string[] = [];
@@ -249,11 +262,12 @@ export class CitySimulation {
   private escapeeCheckAccumulator = 24;
   private prisonBreakAccumulator = 18;
   private fieldTripAccumulator = 14;
-  private citizenBuildAccumulator = 40;
+  private citizenBuildAccumulator = 72;
   private kayakerAccumulator = 8;
   private schoolCommuteAccumulator = 3;
   private animalSpawnAccumulator = 4;
   private farmerButcherAccumulator = 6;
+  private butcherMeatReserve = 0;
   private basementSpreadAccumulator = 0;
   private tornadoVx = 28;
   private tornadoVy = 18;
@@ -282,6 +296,10 @@ export class CitySimulation {
   private trashIdCounter = 1;
   private newsIdCounter = 1;
   private animalIdCounter = 1;
+  private porchPaperIdCounter = 1;
+  private proposalIdCounter = 1;
+  private constructionIdCounter = 1;
+  private playgroundCheckAccumulator = 3;
   private roadTilesCount = 0;
   private buildingsList: PlacedBuilding[] = [];
 
@@ -289,7 +307,66 @@ export class CitySimulation {
     this.loadMap(initialMap || PRESET_MAPS[0]);
   }
 
+  private inBounds(x: number, y: number): boolean {
+    return pfInBounds(x, y, this.gridCols, this.gridRows);
+  }
+
+  private getRoadNeighbors(tiles: MapTile[], x: number, y: number) {
+    return pfGetRoadNeighbors(tiles, x, y, this.gridCols, this.gridRows);
+  }
+
+  private findAdjacentRoadTile(tiles: MapTile[], x: number, y: number) {
+    return pfFindAdjacentRoadTile(tiles, x, y, this.gridCols, this.gridRows);
+  }
+
+  private findNearestWalkableTile(
+    tiles: MapTile[],
+    x: number,
+    y: number,
+    maxRadius = 2,
+    allowFrozenWater = false
+  ) {
+    return pfFindNearestWalkableTile(tiles, x, y, maxRadius, allowFrozenWater, this.gridCols, this.gridRows);
+  }
+
+  private findRoadPath(
+    tiles: MapTile[],
+    start: GridPoint,
+    end: GridPoint,
+    congestionWeight = 2.6
+  ) {
+    return pfFindRoadPath(tiles, start, end, congestionWeight, this.gridCols, this.gridRows);
+  }
+
+  private findPedestrianPath(
+    tiles: MapTile[],
+    start: GridPoint,
+    end: GridPoint,
+    allowFrozenWater = false,
+    allowAllTiles = false
+  ) {
+    return pfFindPedestrianPath(tiles, start, end, allowFrozenWater, allowAllTiles, this.gridCols, this.gridRows);
+  }
+
+  private isIntersectionTile(tiles: MapTile[], x: number, y: number): boolean {
+    return pfIsIntersectionTile(tiles, x, y, this.gridCols, this.gridRows);
+  }
+
+  private incrementBuildingOccupancy(b: PlacedBuilding, amount = 1) {
+    const cap = b.capacity > 0 ? b.capacity : 999;
+    b.totalVisits = Math.min(cap, b.totalVisits + amount);
+  }
+
+  public consumePendingCameraShift(): { dx: number; dy: number } | null {
+    const shift = this.pendingCameraShift;
+    this.pendingCameraShift = null;
+    return shift;
+  }
+
   public loadMap(data: SavedMapData) {
+    const savedState = data.simState;
+    this.gridCols = savedState?.gridCols || data.gridCols || GRID_COLS;
+    this.gridRows = savedState?.gridRows || data.gridRows || GRID_ROWS;
     this.mapId = data.id;
     this.mapName = data.name;
     this.customBlueprints = data.customBlueprints ? [...data.customBlueprints] : [];
@@ -319,9 +396,16 @@ export class CitySimulation {
     this.brokenBridges = [];
     this.trashItems = [];
     this.animals = [];
+    this.pendingProposals = [];
+    this.activeConstructions = [];
     this.newspapers = [];
     this.unreadNewsCount = 0;
     this.dailyHighlights = [];
+    this.porchPapers = [];
+    this.pendingCameraShift = null;
+    this.playgroundCheckAccumulator = 3;
+    this.expansionCredits = 0;
+    this.lastExpansionMilestone = 0;
     this.hasNukeOccurred = false;
     this.earthquakeShakeIntensity = 0;
     this.lastSchoolBellKey = '';
@@ -337,8 +421,8 @@ export class CitySimulation {
       pollutionLevel: 0,
       tornadoActive: false,
       tornadoRemaining: 0,
-      tornadoWx: (GRID_COLS * TILE_SIZE) / 2,
-      tornadoWy: (GRID_ROWS * TILE_SIZE) / 2,
+      tornadoWx: (this.gridCols * TILE_SIZE) / 2,
+      tornadoWy: (this.gridRows * TILE_SIZE) / 2,
       earthquakeActive: false,
       earthquakeRemaining: 0,
       floodActive: false,
@@ -393,11 +477,12 @@ export class CitySimulation {
     this.litterCheckAccumulator = 6;
     this.escapeeCheckAccumulator = 24;
     this.fieldTripAccumulator = 14;
-    this.citizenBuildAccumulator = 40;
+    this.citizenBuildAccumulator = 72;
     this.kayakerAccumulator = 8;
     this.schoolCommuteAccumulator = 3;
     this.animalSpawnAccumulator = 4;
     this.farmerButcherAccumulator = 6;
+    this.butcherMeatReserve = 0;
     this.basementSpreadAccumulator = 0;
     this.lastFestivalDay = -3;
     this.lastCeremonyDay = -3;
@@ -424,12 +509,13 @@ export class CitySimulation {
     };
 
     this.tiles = [];
-    for (let y = 0; y < GRID_ROWS; y++) {
-      for (let x = 0; x < GRID_COLS; x++) {
+    for (let y = 0; y < this.gridRows; y++) {
+      for (let x = 0; x < this.gridCols; x++) {
         this.tiles.push({
           x,
           y,
           terrain: 'grass',
+          isDefaultLand: false,
           hasRoad: false,
           hasZebraCrossing: false,
           hasFootbridge: false,
@@ -445,9 +531,11 @@ export class CitySimulation {
 
     let hasLoadedCityHall = false;
     for (const savedTile of data.tiles) {
-      if (!inBounds(savedTile.x, savedTile.y)) continue;
-      const idx = savedTile.y * GRID_COLS + savedTile.x;
+      if (!this.inBounds(savedTile.x, savedTile.y)) continue;
+      const idx = savedTile.y * this.gridCols + savedTile.x;
       this.tiles[idx].terrain = savedTile.terrain;
+      this.tiles[idx].isDefaultLand =
+        savedTile.terrain === 'void' ? false : savedTile.isDefaultLand ?? true;
       this.tiles[idx].hasRoad = savedTile.hasRoad;
       this.tiles[idx].hasZebraCrossing = Boolean(savedTile.hasZebraCrossing);
       this.tiles[idx].hasFootbridge = Boolean(savedTile.hasFootbridge);
@@ -467,6 +555,56 @@ export class CitySimulation {
         };
         this.initializeBuildingProps(bld);
         this.tiles[idx].building = bld;
+      }
+    }
+
+    if (savedState) {
+      this.dayCount = Math.max(1, savedState.dayCount ?? 1);
+      this.minutesOfDay = ((savedState.minutesOfDay ?? 7 * 60 + 5) % 1440 + 1440) % 1440;
+      this.seasonIndex = savedState.seasonIndex ?? 0;
+      this.season = savedState.season ?? 'Spring';
+      this.weather = savedState.weather ?? 'Sunny';
+      this.weatherTimer = savedState.weatherTimer ?? 95;
+      this.expansionCredits = savedState.expansionCredits ?? 0;
+      this.lastExpansionMilestone =
+        savedState.lastExpansionMilestone ?? Math.floor(this.dayCount / 10);
+      this.newspapers = savedState.newspapers
+        ? savedState.newspapers.map((n) => ({
+            ...n,
+            highlights: [...n.highlights],
+            readerComments: n.readerComments ? n.readerComments.map((c) => ({ ...c })) : undefined,
+          }))
+        : [];
+      this.hasNukeOccurred = Boolean(savedState.hasNukeOccurred);
+      this.totalDeaths = savedState.totalDeaths ?? 0;
+      this.mayorAlive = savedState.mayorAlive ?? true;
+      this.completedTrips = savedState.completedTrips ?? 0;
+      this.stoppedRobberies = savedState.stoppedRobberies ?? 0;
+      this.capturedProtesters = savedState.capturedProtesters ?? 0;
+      this.choppedTrees = savedState.choppedTrees ?? 0;
+      this.plantedTrees = savedState.plantedTrees ?? 0;
+      this.totalCrashes = savedState.totalCrashes ?? 0;
+      this.fishCaught = savedState.fishCaught ?? 0;
+      this.prisonInmates = savedState.prisonInmates ?? 0;
+      this.totalJailed = savedState.totalJailed ?? 0;
+      this.totalReleased = savedState.totalReleased ?? 0;
+      this.totalLawsuits = savedState.totalLawsuits ?? 0;
+      this.citizenHappiness = savedState.citizenHappiness ?? 76;
+      this.economyScore = savedState.economyScore ?? 82;
+      this.pendingProposals = savedState.pendingProposals
+        ? savedState.pendingProposals.map((pr) => ({ ...pr, iconGrid: [...pr.iconGrid] }))
+        : [];
+      this.activeConstructions = savedState.activeConstructions
+        ? savedState.activeConstructions.map((ac) => ({ ...ac, iconGrid: [...ac.iconGrid] }))
+        : [];
+      const curMin = Math.floor(this.minutesOfDay);
+      if (curMin >= 970) {
+        this.lastSchoolBellKey = `${this.dayCount}_end`;
+      } else if (curMin >= 490) {
+        this.lastSchoolBellKey = `${this.dayCount}_start`;
+      }
+      if (Math.floor(this.dayCount / 10) > this.lastExpansionMilestone) {
+        this.checkExpansionMilestone();
       }
     }
 
@@ -496,15 +634,53 @@ export class CitySimulation {
   }
 
   public exportMapData(name?: string, subtitle?: string): SavedMapData {
+    const simState: SavedSimState = {
+      dayCount: this.dayCount,
+      minutesOfDay: this.minutesOfDay,
+      seasonIndex: this.seasonIndex,
+      season: this.season,
+      weather: this.weather,
+      weatherTimer: this.weatherTimer,
+      gridCols: this.gridCols,
+      gridRows: this.gridRows,
+      expansionCredits: this.expansionCredits,
+      lastExpansionMilestone: this.lastExpansionMilestone,
+      newspapers: this.newspapers.map((n) => ({
+        ...n,
+        highlights: [...n.highlights],
+        readerComments: n.readerComments ? n.readerComments.map((c) => ({ ...c })) : undefined,
+      })),
+      hasNukeOccurred: this.hasNukeOccurred,
+      totalDeaths: this.totalDeaths,
+      mayorAlive: this.mayorAlive,
+      completedTrips: this.completedTrips,
+      stoppedRobberies: this.stoppedRobberies,
+      capturedProtesters: this.capturedProtesters,
+      choppedTrees: this.choppedTrees,
+      plantedTrees: this.plantedTrees,
+      totalCrashes: this.totalCrashes,
+      fishCaught: this.fishCaught,
+      prisonInmates: this.prisonInmates,
+      totalJailed: this.totalJailed,
+      totalReleased: this.totalReleased,
+      totalLawsuits: this.totalLawsuits,
+      citizenHappiness: this.citizenHappiness,
+      economyScore: this.economyScore,
+      pendingProposals: this.pendingProposals.map((pr) => ({ ...pr, iconGrid: [...pr.iconGrid] })),
+      activeConstructions: this.activeConstructions.map((ac) => ({ ...ac, iconGrid: [...ac.iconGrid] })),
+    };
     return {
       id: this.mapId,
       name: name || this.mapName,
-      subtitle: subtitle || `${this.buildingsList.length} plots · ${this.roadTilesCount} road tiles`,
+      subtitle: subtitle || `${this.buildingsList.length} plots · ${this.roadTilesCount} roads`,
       updatedAt: Date.now(),
+      gridCols: this.gridCols,
+      gridRows: this.gridRows,
       tiles: this.tiles.map((t) => ({
         x: t.x,
         y: t.y,
         terrain: t.terrain,
+        isDefaultLand: t.isDefaultLand,
         hasRoad: t.hasRoad,
         hasZebraCrossing: t.hasZebraCrossing || undefined,
         hasFootbridge: t.hasFootbridge || undefined,
@@ -512,6 +688,7 @@ export class CitySimulation {
         building: t.building ? { ...t.building, iconGrid: [...t.building.iconGrid] } : null,
       })),
       customBlueprints: this.customBlueprints.map((bp) => ({ ...bp, iconGrid: [...bp.iconGrid] })),
+      simState,
     };
   }
 
@@ -632,6 +809,101 @@ export class CitySimulation {
     return this.marketStalls.find((s) => s.x === x && s.y === y) || null;
   }
 
+  public getProposalAt(x: number, y: number): ConstructionProposal | null {
+    return this.pendingProposals.find((p) => p.x === x && p.y === y) || null;
+  }
+
+  public getConstructionAt(x: number, y: number): ActiveConstruction | null {
+    return this.activeConstructions.find((c) => c.x === x && c.y === y) || null;
+  }
+
+  public approveProposal(id: string): boolean {
+    const idx = this.pendingProposals.findIndex((p) => p.id === id);
+    if (idx === -1) return false;
+    const prop = this.pendingProposals[idx];
+    const tile = this.getTile(prop.x, prop.y);
+    if (
+      !tile ||
+      (tile.terrain !== 'grass' && tile.terrain !== 'sand') ||
+      tile.hasRoad ||
+      tile.building ||
+      this.activeConstructions.some((c) => c.x === prop.x && c.y === prop.y)
+    ) {
+      this.pendingProposals.splice(idx, 1);
+      return false;
+    }
+
+    this.pendingProposals.splice(idx, 1);
+    const constructionId = `con_${this.constructionIdCounter++}`;
+    this.removeStallOnTile(prop.x, prop.y);
+    const active: ActiveConstruction = {
+      id: constructionId,
+      applicantName: prop.applicantName,
+      blueprintId: prop.blueprintId,
+      blueprintName: prop.blueprintName,
+      category: prop.category,
+      iconGrid: [...prop.iconGrid],
+      accentColor: prop.accentColor,
+      x: prop.x,
+      y: prop.y,
+      areaName: prop.areaName,
+      totalGameMinutes: prop.durationGameMinutes,
+      elapsedGameMinutes: 0,
+    };
+    this.activeConstructions.push(active);
+    this.dispatchBuildersForConstruction(active);
+    this.floatingLabels.push({
+      wx: (prop.x + 0.5) * TILE_SIZE,
+      wy: (prop.y + 0.25) * TILE_SIZE,
+      text: 'Permit Approved!',
+      color: '#ECFDF5',
+      bgColor: '#059669',
+      age: 0,
+      maxAge: 2.0,
+    });
+    return true;
+  }
+
+  public declineProposal(id: string): boolean {
+    const idx = this.pendingProposals.findIndex((p) => p.id === id);
+    if (idx === -1) return false;
+    const prop = this.pendingProposals[idx];
+    this.pendingProposals.splice(idx, 1);
+    this.floatingLabels.push({
+      wx: (prop.x + 0.5) * TILE_SIZE,
+      wy: (prop.y + 0.25) * TILE_SIZE,
+      text: 'Permit Declined',
+      color: '#FEF2F2',
+      bgColor: '#B91C1C',
+      age: 0,
+      maxAge: 1.8,
+    });
+    return true;
+  }
+
+  private clearPermitsAtTile(x: number, y: number) {
+    for (let i = this.pendingProposals.length - 1; i >= 0; i--) {
+      if (this.pendingProposals[i].x === x && this.pendingProposals[i].y === y) {
+        this.pendingProposals.splice(i, 1);
+      }
+    }
+    for (let i = this.activeConstructions.length - 1; i >= 0; i--) {
+      const c = this.activeConstructions[i];
+      if (c.x === x && c.y === y) {
+        this.activeConstructions.splice(i, 1);
+        for (const p of this.people) {
+          if (p.targetConstructionId === c.id) {
+            p.targetConstructionId = undefined;
+            if (!this.assignReturnRoute(p)) {
+              p.state = 'returning';
+              p.holdTimer = 0;
+            }
+          }
+        }
+      }
+    }
+  }
+
   public getEventVenues(): PlacedBuilding[] {
     const priority: Record<BuildingCategory, number> = {
       city_hall: 1,
@@ -661,8 +933,306 @@ export class CitySimulation {
   }
 
   public getTile(x: number, y: number): MapTile | null {
-    if (!inBounds(x, y)) return null;
-    return this.tiles[y * GRID_COLS + x];
+    if (!this.inBounds(x, y)) return null;
+    return this.tiles[y * this.gridCols + x];
+  }
+
+  public canPlaceExpansionLandAt(x: number, y: number): boolean {
+    const tile = this.getTile(x, y);
+    if (!tile || tile.terrain !== 'void' || this.expansionCredits <= 0) return false;
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        if (Math.abs(dx) + Math.abs(dy) > 2) continue;
+        const nt = this.getTile(x + dx, y + dy);
+        if (nt && nt.terrain !== 'void') return true;
+      }
+    }
+    return false;
+  }
+
+  public canRemoveExpansionLandAt(x: number, y: number): boolean {
+    const tile = this.getTile(x, y);
+    return Boolean(tile && tile.terrain !== 'void' && !tile.isDefaultLand);
+  }
+
+  public applyExpansionLand(
+    x: number,
+    y: number,
+    mode: 'toggle' | 'add' | 'remove' = 'toggle'
+  ): boolean {
+    const tile = this.getTile(x, y);
+    if (!tile) return false;
+    if (tile.terrain === 'void') {
+      if (mode === 'remove' || !this.canPlaceExpansionLandAt(x, y)) return false;
+      tile.terrain = 'grass';
+      tile.isDefaultLand = false;
+      this.expansionCredits = Math.max(0, this.expansionCredits - 1);
+      this.rebuildCaches();
+      return true;
+    }
+    if (mode === 'add' || tile.isDefaultLand) return false;
+    // Remove custom expanded tile back into expandable void & refund 1 credit
+    tile.building = null;
+    tile.hasRoad = false;
+    tile.hasZebraCrossing = false;
+    tile.hasFootbridge = false;
+    tile.isFlooded = false;
+    this.resolveBrokenBridgeAt(x, y);
+    this.removeStallOnTile(x, y);
+    this.cars = this.cars.filter(
+      (c) => !(Math.floor(c.wx / TILE_SIZE) === x && Math.floor(c.wy / TILE_SIZE) === y)
+    );
+    this.people = this.people.filter(
+      (p) =>
+        p.role === 'mayor' ||
+        !(Math.floor(p.wx / TILE_SIZE) === x && Math.floor(p.wy / TILE_SIZE) === y)
+    );
+    for (let i = this.crashes.length - 1; i >= 0; i--) {
+      if (this.crashes[i].x === x && this.crashes[i].y === y) {
+        this.releaseCrashCars(this.crashes[i].id);
+        this.crashes.splice(i, 1);
+      }
+    }
+    this.clearPermitsAtTile(x, y);
+    tile.terrain = 'void';
+    tile.isDefaultLand = false;
+    this.expansionCredits += 1;
+    this.rebuildCaches();
+    return true;
+  }
+
+  private checkExpansionMilestone() {
+    const milestone = Math.floor(this.dayCount / 10);
+    while (milestone > this.lastExpansionMilestone) {
+      this.lastExpansionMilestone += 1;
+      const padX = 3;
+      const padY = 2;
+      const newCols = this.gridCols + padX * 2;
+      const newRows = this.gridRows + padY * 2;
+      const newTiles: MapTile[] = [];
+      for (let y = 0; y < newRows; y++) {
+        for (let x = 0; x < newCols; x++) {
+          newTiles.push({
+            x,
+            y,
+            terrain: 'void',
+            isDefaultLand: false,
+            hasRoad: false,
+            hasZebraCrossing: false,
+            hasFootbridge: false,
+            isBridgeBroken: false,
+            isFlooded: false,
+            intersection: { controlType: 'signal', cycleDuration: 18, phaseOffset: (x + y) % 10 },
+            building: null,
+            congestionScore: 0,
+            jammedCarsCount: 0,
+          });
+        }
+      }
+      for (const oldTile of this.tiles) {
+        const nx = oldTile.x + padX;
+        const ny = oldTile.y + padY;
+        const nIdx = ny * newCols + nx;
+        const movedBld = oldTile.building
+          ? { ...oldTile.building, x: nx, y: ny }
+          : null;
+        newTiles[nIdx] = {
+          ...oldTile,
+          x: nx,
+          y: ny,
+          building: movedBld,
+        };
+      }
+      this.tiles = newTiles;
+      this.gridCols = newCols;
+      this.gridRows = newRows;
+
+      const shiftPxX = padX * TILE_SIZE;
+      const shiftPxY = padY * TILE_SIZE;
+      for (const car of this.cars) {
+        car.wx += shiftPxX;
+        car.wy += shiftPxY;
+        car.path = car.path.map((pt) => ({ x: pt.x + padX, y: pt.y + padY }));
+      }
+      for (const p of this.people) {
+        p.wx += shiftPxX;
+        p.wy += shiftPxY;
+        p.targetWx += shiftPxX;
+        p.targetWy += shiftPxY;
+        if (p.targetTileX !== undefined) p.targetTileX += padX;
+        if (p.targetTileY !== undefined) p.targetTileY += padY;
+        if (p.waterTileX !== undefined) p.waterTileX += padX;
+        if (p.waterTileY !== undefined) p.waterTileY += padY;
+        if (p.pedestrianPath) {
+          p.pedestrianPath = p.pedestrianPath.map((pt) => ({ x: pt.x + padX, y: pt.y + padY }));
+        }
+      }
+      for (const a of this.animals) {
+        a.wx += shiftPxX;
+        a.wy += shiftPxY;
+        a.targetWx += shiftPxX;
+        a.targetWy += shiftPxY;
+      }
+      for (const s of this.marketStalls) {
+        s.x += padX;
+        s.y += padY;
+        s.wx += shiftPxX;
+        s.wy += shiftPxY;
+      }
+      for (const r of this.robberies) {
+        r.x += padX;
+        r.y += padY;
+      }
+      for (const pr of this.protests) {
+        pr.x += padX;
+        pr.y += padY;
+      }
+      for (const f of this.fires) {
+        f.x += padX;
+        f.y += padY;
+        f.wx += shiftPxX;
+        f.wy += shiftPxY;
+      }
+      for (const c of this.crashes) {
+        c.x += padX;
+        c.y += padY;
+        c.wx += shiftPxX;
+        c.wy += shiftPxY;
+      }
+      for (const ev of this.cityEvents) {
+        ev.x += padX;
+        ev.y += padY;
+      }
+      for (const d of this.deathEvents) {
+        d.x += padX;
+        d.y += padY;
+        d.wx += shiftPxX;
+        d.wy += shiftPxY;
+      }
+      for (const ms of this.mayorSpeeches) {
+        ms.x += padX;
+        ms.y += padY;
+      }
+      for (const cr of this.blastCraters) {
+        cr.x += padX;
+        cr.y += padY;
+        cr.wx += shiftPxX;
+        cr.wy += shiftPxY;
+      }
+      for (const nb of this.nukeBlasts) {
+        nb.x += padX;
+        nb.y += padY;
+        nb.wx += shiftPxX;
+        nb.wy += shiftPxY;
+      }
+      for (const br of this.brokenBridges) {
+        br.x += padX;
+        br.y += padY;
+        br.wx += shiftPxX;
+        br.wy += shiftPxY;
+      }
+      for (const tr of this.trashItems) {
+        tr.x += padX;
+        tr.y += padY;
+        tr.wx += shiftPxX;
+        tr.wy += shiftPxY;
+      }
+      for (const pp of this.porchPapers) {
+        if (pp.x !== undefined) pp.x += padX;
+        if (pp.y !== undefined) pp.y += padY;
+        pp.wx += shiftPxX;
+        pp.wy += shiftPxY;
+      }
+      for (const sm of this.snowmen) {
+        sm.x += padX;
+        sm.y += padY;
+        sm.wx += shiftPxX;
+        sm.wy += shiftPxY;
+      }
+      for (const pr of this.pendingProposals) {
+        pr.x += padX;
+        pr.y += padY;
+      }
+      for (const ac of this.activeConstructions) {
+        ac.x += padX;
+        ac.y += padY;
+      }
+      for (const sb of this.snowballs) {
+        sb.x1 += shiftPxX;
+        sb.y1 += shiftPxY;
+        sb.x2 += shiftPxX;
+        sb.y2 += shiftPxY;
+      }
+      for (const fl of this.floatingLabels) {
+        fl.wx += shiftPxX;
+        fl.wy += shiftPxY;
+      }
+      for (const sp of this.smokeParticles) {
+        sp.wx += shiftPxX;
+        sp.wy += shiftPxY;
+      }
+      for (const wc of this.woodChips) {
+        wc.wx += shiftPxX;
+        wc.wy += shiftPxY;
+      }
+      for (const cf of this.confetti) {
+        cf.wx += shiftPxX;
+        cf.wy += shiftPxY;
+      }
+      for (const hr of this.honkRipples) {
+        hr.wx += shiftPxX;
+        hr.wy += shiftPxY;
+      }
+      for (const gt of this.gunfireTracers) {
+        gt.x1 += shiftPxX;
+        gt.y1 += shiftPxY;
+        gt.x2 += shiftPxX;
+        gt.y2 += shiftPxY;
+      }
+      for (const sz of this.sleepZzzParticles) {
+        sz.wx += shiftPxX;
+        sz.wy += shiftPxY;
+      }
+      for (const ce of this.choppedTreeEvents) {
+        ce.x += padX;
+        ce.y += padY;
+        ce.wx += shiftPxX;
+        ce.wy += shiftPxY;
+      }
+      for (const cp of this.capturePopups) {
+        cp.wx += shiftPxX;
+        cp.wy += shiftPxY;
+      }
+      const nextChop = new Map<string, number>();
+      this.tileChopProgress.forEach((v, k) => {
+        const [kx, ky] = k.split(',').map(Number);
+        nextChop.set(`${kx + padX},${ky + padY}`, v);
+      });
+      this.tileChopProgress = nextChop;
+      this.crises.tornadoWx += shiftPxX;
+      this.crises.tornadoWy += shiftPxY;
+      this.pendingCameraShift = {
+        dx: (this.pendingCameraShift?.dx ?? 0) + shiftPxX,
+        dy: (this.pendingCameraShift?.dy ?? 0) + shiftPxY,
+      };
+
+      const landBonus = 100;
+      this.expansionCredits += landBonus;
+      this.rebuildCaches();
+      this.floatingLabels.push({
+        wx: (this.gridCols * TILE_SIZE) / 2,
+        wy: (this.gridRows * TILE_SIZE) / 2 - 20,
+        text: `DAY ${this.dayCount} MILESTONE! +${landBonus} Boxes of Land`,
+        color: '#ECFDF5',
+        bgColor: '#047857',
+        age: 0,
+        maxAge: 3.4,
+      });
+      this.logDailyNews(
+        `BIGGER MAP UNLOCKED (Day ${this.dayCount}): Surveyors cleared ${landBonus} new boxes of land around ${this.mapName}—use the Land tool to place them wherever you want!`
+      );
+    }
   }
 
   private removeStallOnTile(x: number, y: number): boolean {
@@ -697,8 +1267,9 @@ export class CitySimulation {
   }
 
   public setTerrain(x: number, y: number, terrain: TerrainType): boolean {
+    if (terrain === 'void') return false;
     const tile = this.getTile(x, y);
-    if (!tile) return false;
+    if (!tile || tile.terrain === 'void') return false;
     if (tile.terrain === terrain) return false;
     if (terrain !== 'water') {
       tile.hasFootbridge = false;
@@ -708,6 +1279,7 @@ export class CitySimulation {
       if (tile.building) tile.building = null;
       if (terrain === 'forest') tile.hasRoad = false;
       this.removeStallOnTile(x, y);
+      this.clearPermitsAtTile(x, y);
     }
     tile.terrain = terrain;
     this.rebuildCaches();
@@ -716,7 +1288,7 @@ export class CitySimulation {
 
   public paveRoad(x: number, y: number): boolean {
     const tile = this.getTile(x, y);
-    if (!tile) return false;
+    if (!tile || tile.terrain === 'void') return false;
     if (tile.hasRoad) return false;
     if (tile.building) return false;
     if (tile.terrain === 'forest') tile.terrain = 'grass';
@@ -729,6 +1301,7 @@ export class CitySimulation {
       phaseOffset: ((x * 3 + y * 5) % 12),
     };
     this.removeStallOnTile(x, y);
+    this.clearPermitsAtTile(x, y);
     this.rebuildCaches();
     return true;
   }
@@ -749,7 +1322,7 @@ export class CitySimulation {
 
   public placeBuilding(x: number, y: number, blueprint: BuildingBlueprint): PlacedBuilding | null {
     const tile = this.getTile(x, y);
-    if (!tile) return null;
+    if (!tile || tile.terrain === 'void') return null;
     if (blueprint.category === 'city_hall' && this.hasCityHall()) {
       return null;
     }
@@ -757,9 +1330,12 @@ export class CitySimulation {
     if (tile.terrain === 'water') return null;
     if (tile.hasRoad && !isRoadPath) return null;
 
-    tile.terrain = 'grass';
+    if (tile.terrain === 'forest') {
+      tile.terrain = 'grass';
+    }
     tile.hasFootbridge = false;
     this.removeStallOnTile(x, y);
+    this.clearPermitsAtTile(x, y);
     if (isRoadPath) {
       if (!tile.hasRoad) {
         tile.hasRoad = true;
@@ -792,7 +1368,7 @@ export class CitySimulation {
 
   public bulldozeTile(x: number, y: number): boolean {
     const tile = this.getTile(x, y);
-    if (!tile) return false;
+    if (!tile || tile.terrain === 'void') return false;
     if (tile.hasFootbridge) {
       tile.hasFootbridge = false;
       this.resolveBrokenBridgeAt(x, y);
@@ -816,6 +1392,10 @@ export class CitySimulation {
       changed = true;
     }
     if (this.removeStallOnTile(x, y)) {
+      changed = true;
+    }
+    if (this.pendingProposals.some((p) => p.x === x && p.y === y) || this.activeConstructions.some((c) => c.x === x && c.y === y)) {
+      this.clearPermitsAtTile(x, y);
       changed = true;
     }
     if (changed) {
@@ -990,14 +1570,144 @@ export class CitySimulation {
       if ((this.dayCount - 1) % 10 === 0) {
         this.cycleSeason(false);
       }
+      this.checkExpansionMilestone();
     }
+  }
+
+  public advanceBackgroundSeconds(elapsedSec: number) {
+    if (!this.isRunning || elapsedSec <= 0) return;
+    const clampedSec = Math.min(elapsedSec, 3600 * 6);
+    const simSec = clampedSec * this.timeScale;
+    this.minutesOfDay += simSec * 4;
+    while (this.minutesOfDay >= 1440) {
+      this.minutesOfDay -= 1440;
+      this.dayCount += 1;
+      if ((this.dayCount - 1) % 10 === 0) {
+        this.cycleSeason(false);
+      }
+      this.checkExpansionMilestone();
+    }
+    this.weatherTimer -= simSec;
+    while (this.weatherTimer <= 0) {
+      this.weatherTimer += 65 + Math.random() * 65;
+      this.weather = this.rollWeatherForSeason();
+      this.weatherParticles = [];
+    }
+    for (const b of this.buildingsList) {
+      if (b.category === 'crops' && (b.cropStage ?? 1) < 3) {
+        b.cropTimer = (b.cropTimer ?? 0) + simSec;
+        while (b.cropTimer >= 22 && (b.cropStage ?? 1) < 3) {
+          b.cropTimer -= 22;
+          b.cropStage = (b.cropStage ?? 1) + 1;
+        }
+      }
+    }
+  }
+
+  public isStoreOpen(): boolean {
+    const h = this.minutesOfDay / 60;
+    return h >= 6.0 && h < 22.0;
+  }
+
+  public getBuildings(): PlacedBuilding[] {
+    return this.buildingsList;
+  }
+
+  public refreshSimulationPerformance(): { clearedEntities: number } {
+    let cleared = 0;
+
+    // Clear heavy transient visual particle queues while keeping the city & timeline completely intact
+    cleared +=
+      this.woodChips.length +
+      this.confetti.length +
+      this.smokeParticles.length +
+      this.weatherParticles.length +
+      this.gunfireTracers.length +
+      this.snowballs.length +
+      this.honkRipples.length +
+      this.floatingLabels.length +
+      this.sleepZzzParticles.length;
+
+    this.woodChips = [];
+    this.confetti = [];
+    this.smokeParticles = [];
+    this.weatherParticles = [];
+    this.gunfireTracers = [];
+    this.snowballs = [];
+    this.honkRipples = [];
+    this.floatingLabels = [];
+    this.sleepZzzParticles = [];
+
+    // Keep emergency cars and up to 18 active flowing civilian cars; clear jammed stalls
+    const keptCars: Car[] = [];
+    let civilianKept = 0;
+    for (const c of this.cars) {
+      const isEmergency =
+        c.type === 'ambulance' || c.type === 'police' || c.type === 'firetruck' || c.type === 'hearse';
+      if (isEmergency || (!c.isJammed && civilianKept < 18)) {
+        c.waitSeconds = 0;
+        c.isJammed = false;
+        keptCars.push(c);
+        if (!isEmergency) civilianKept++;
+      } else {
+        cleared++;
+      }
+    }
+    this.cars = keptCars;
+
+    // Keep essential civic roles and trim excess ambient crowd walkers causing CPU pressure
+    const keepAlways = new Set<Person['role']>([
+      'mayor',
+      'invader',
+      'soldier',
+      'police',
+      'firefighter',
+      'medic',
+      'protester',
+      'escapee',
+      'paperboy',
+    ]);
+    const keptPeople: Person[] = [];
+    let ambientCount = 0;
+    for (const p of this.people) {
+      if (keepAlways.has(p.role)) {
+        p.rerouteCooldown = 0;
+        keptPeople.push(p);
+      } else if (ambientCount < 28) {
+        p.rerouteCooldown = 0;
+        keptPeople.push(p);
+        ambientCount++;
+      } else {
+        cleared++;
+      }
+    }
+    this.people = keptPeople;
+
+    // Clear tile congestion backlog & accumulators
+    for (const t of this.tiles) {
+      t.congestionScore = 0;
+      t.jammedCarsCount = 0;
+    }
+    this.spawnAccumulator = 0;
+    this.crashCheckAccumulator = 0;
+
+    this.floatingLabels.push({
+      wx: (this.gridCols * TILE_SIZE) / 2,
+      wy: (this.gridRows * TILE_SIZE) / 2 - 12,
+      text: 'Refreshed & Smoothed!',
+      color: '#ECFDF5',
+      bgColor: '#0F766E',
+      age: 0,
+      maxAge: 1.8,
+    });
+    return { clearedEntities: cleared };
   }
 
   public step(rawDt: number, playAudio = true) {
     const dt = Math.min(rawDt, 0.05);
     if (!this.isRunning) return;
 
-    const steps = Math.max(1, Math.min(8, Math.round(this.timeScale)));
+    const steps = Math.min(3, Math.max(1, Math.ceil(this.timeScale / 2)));
     const scaledDt = dt * this.timeScale;
     const subDt = scaledDt / steps;
 
@@ -1015,6 +1725,7 @@ export class CitySimulation {
       if ((this.dayCount - 1) % 10 === 0) {
         this.cycleSeason(false);
       }
+      this.checkExpansionMilestone();
     }
 
     // Spawn cars according to road capacity, building count & time-of-day rush multiplier
@@ -1067,8 +1778,9 @@ export class CitySimulation {
     // Step Citizen Deaths & Cemetery Hearses
     this.updateDeaths(simDt, simDt, playAudio);
 
-    // Step Weekday School Bell, Parents & Students, and Building Statuses
+    // Step Weekday School Bell, Parents & Students, Playgrounds, and Building Statuses
     this.updateSchoolAndBuildingStatuses(simDt, simDt, playAudio);
+    this.updateNewspaperDelivery(simDt, simDt, playAudio);
 
     // Step Woodcutters, Planters, Arsonists, Firefighters & Mayor
     this.updatePeopleAndChop(simDt, simDt, playAudio);
@@ -1219,7 +1931,7 @@ export class CitySimulation {
     const cemeteries = this.buildingsList.filter((b) => b.category === 'cemetery');
     if (cemeteries.length === 0) return false;
 
-    const startRoad = findAdjacentRoadTile(this.tiles, origin.x, origin.y);
+    const startRoad = this.findAdjacentRoadTile(this.tiles, origin.x, origin.y);
     if (!startRoad) return false;
 
     const sortedCemeteries = [...cemeteries].sort(
@@ -1227,9 +1939,9 @@ export class CitySimulation {
     );
 
     for (const cem of sortedCemeteries) {
-      const endRoad = findAdjacentRoadTile(this.tiles, cem.x, cem.y);
+      const endRoad = this.findAdjacentRoadTile(this.tiles, cem.x, cem.y);
       if (!endRoad) continue;
-      const roadPath = findRoadPath(this.tiles, startRoad, endRoad, 1.0);
+      const roadPath = this.findRoadPath(this.tiles, startRoad, endRoad, 1.0);
       if (!roadPath || roadPath.length < 2) continue;
 
       const fullPath: GridPoint[] = [{ x: origin.x, y: origin.y }, ...roadPath, { x: cem.x, y: cem.y }];
@@ -1354,7 +2066,7 @@ export class CitySimulation {
     const stations = this.buildingsList.filter((b) => b.category === 'police');
     if (stations.length === 0) return false;
 
-    const destRoad = findAdjacentRoadTile(this.tiles, incident.x, incident.y);
+    const destRoad = this.findAdjacentRoadTile(this.tiles, incident.x, incident.y);
     if (!destRoad) return false;
 
     // Pick closest road-connected police station
@@ -1368,9 +2080,9 @@ export class CitySimulation {
     );
 
     for (const st of sortedStations) {
-      const startRoad = findAdjacentRoadTile(this.tiles, st.x, st.y);
+      const startRoad = this.findAdjacentRoadTile(this.tiles, st.x, st.y);
       if (!startRoad) continue;
-      const path = findRoadPath(this.tiles, startRoad, destRoad, 0.8);
+      const path = this.findRoadPath(this.tiles, startRoad, destRoad, 0.8);
       if (path && path.length >= 2) {
         bestStation = st;
         bestPath = path;
@@ -1421,7 +2133,7 @@ export class CitySimulation {
       (b) =>
         b.category !== 'road_path' &&
         b.category !== 'landmark' &&
-        getRoadNeighbors(this.tiles, b.x, b.y).length > 0
+        this.getRoadNeighbors(this.tiles, b.x, b.y).length > 0
     );
     if (connected.length < 2) return null;
 
@@ -1433,7 +2145,11 @@ export class CitySimulation {
     const hospitals = byCat('hospital');
     const crops = byCat('crops');
     const offices = [...byCat('workplace'), ...byCat('factory'), ...byCat('city_hall'), ...crops];
-    const visitSpots = [...byCat('visit_spot'), ...byCat('commercial')];
+    const storesOpen = this.isStoreOpen();
+    const visitSpots = [
+      ...byCat('visit_spot'),
+      ...(storesOpen ? byCat('commercial') : []),
+    ];
     const parks = byCat('park');
 
     let originPool: PlacedBuilding[] = connected;
@@ -1506,7 +2222,15 @@ export class CitySimulation {
     }
 
     const origin = originPool[Math.floor(Math.random() * originPool.length)];
-    let dest = destPool[Math.floor(Math.random() * destPool.length)];
+    const availableDestPool = destPool.filter(
+      (b) => b.id !== origin.id && (b.capacity <= 0 || b.totalVisits < b.capacity)
+    );
+    const effectiveDestPool =
+      availableDestPool.length > 0 ? availableDestPool : destPool.filter((b) => b.id !== origin.id);
+    let dest =
+      effectiveDestPool.length > 0
+        ? effectiveDestPool[Math.floor(Math.random() * effectiveDestPool.length)]
+        : destPool[Math.floor(Math.random() * destPool.length)];
     if (dest.id === origin.id) {
       const others = connected.filter((b) => b.id !== origin.id);
       if (others.length === 0) return null;
@@ -1539,11 +2263,11 @@ export class CitySimulation {
     vehicleType: VehicleType
   ): boolean {
     if (this.cars.length >= MAX_CARS) return false;
-    const startRoad = findAdjacentRoadTile(this.tiles, origin.x, origin.y);
-    const endRoad = findAdjacentRoadTile(this.tiles, dest.x, dest.y);
+    const startRoad = this.findAdjacentRoadTile(this.tiles, origin.x, origin.y);
+    const endRoad = this.findAdjacentRoadTile(this.tiles, dest.x, dest.y);
     if (!startRoad || !endRoad) return false;
 
-    const roadPath = findRoadPath(this.tiles, startRoad, endRoad);
+    const roadPath = this.findRoadPath(this.tiles, startRoad, endRoad);
     if (!roadPath || roadPath.length < 2) return false;
 
     const isEmergency = vehicleType === 'ambulance' || vehicleType === 'police' || vehicleType === 'firetruck';
@@ -1637,6 +2361,10 @@ export class CitySimulation {
   private updateCars(dt: number, realDt: number, playAudio: boolean) {
     if (dt <= 0) return;
 
+    // Micro-step kinematics when timeScale is fast (3x/8x) so cars never overshoot turns/waypoints or freeze
+    const subSteps = Math.max(1, Math.min(4, Math.ceil(dt / 0.038)));
+    const stepDt = dt / subSteps;
+
     for (let i = this.cars.length - 1; i >= 0; i--) {
       const car = this.cars[i];
       if (car.hornFlash > 0) car.hornFlash = Math.max(0, car.hornFlash - dt);
@@ -1652,320 +2380,408 @@ export class CitySimulation {
         continue;
       }
 
-      if (car.pathIndex >= car.path.length) {
-        if (this.handleEmergencyArrival(car)) {
-          continue;
-        }
-        this.finishTrip(car);
-        this.cars.splice(i, 1);
-        continue;
-      }
-
-      const { tx, ty, angle: segmentAngle } = this.getTargetWorldPos(car, car.pathIndex);
-      const toX = tx - car.wx;
-      const toY = ty - car.wy;
-      const distToTarget = Math.hypot(toX, toY);
-      const passedWaypoint =
-        toX * Math.cos(segmentAngle) + toY * Math.sin(segmentAngle) < 2 && distToTarget < 24;
-
-      if (distToTarget < 11 || passedWaypoint) {
-        car.pathIndex += 1;
+      let removedCar = false;
+      for (let sub = 0; sub < subSteps; sub++) {
         if (car.pathIndex >= car.path.length) {
-          if (this.handleEmergencyArrival(car)) {
-            continue;
+          if (!this.handleEmergencyArrival(car)) {
+            this.finishTrip(car);
+            this.cars.splice(i, 1);
           }
-          this.finishTrip(car);
-          this.cars.splice(i, 1);
-          continue;
-        }
-      }
-
-      // Smoothly steer toward target point (O(1) NaN-safe angle wrap)
-      const desiredAngle = distToTarget > 1 ? Math.atan2(toY, toX) : segmentAngle;
-      if (!Number.isFinite(car.angle)) car.angle = desiredAngle;
-      const rawDiff = desiredAngle - car.angle;
-      const angleDiff = Number.isFinite(rawDiff)
-        ? Math.atan2(Math.sin(rawDiff), Math.cos(rawDiff))
-        : 0;
-      car.angle += angleDiff * Math.min(1, dt * 11);
-
-      const fwdX = Math.cos(car.angle);
-      const fwdY = Math.sin(car.angle);
-
-      // 1. Check car-following distance ahead in same lane & direction
-      const isEmergency =
-        car.type === 'ambulance' || car.type === 'police' || car.type === 'firetruck';
-      const weatherSpeedMult = isEmergency
-        ? 1
-        : this.weather === 'Storm'
-        ? 0.78
-        : this.weather === 'Rain' || this.weather === 'Snow' || this.weather === 'Foggy'
-        ? 0.88
-        : this.weather === 'Windy'
-        ? 0.94
-        : 1;
-      const curCarTile = this.getTile(Math.floor(car.wx / TILE_SIZE), Math.floor(car.wy / TILE_SIZE));
-      const floodMult = curCarTile?.isFlooded ? 0.52 : 1;
-      let desiredMaxSpeed = car.maxSpeed * weatherSpeedMult * floodMult;
-      let blockedByVehicle = false;
-      const safeGap = car.type === 'bus' ? 28 : 23;
-      const lookAhead = 48;
-
-      for (let j = 0; j < this.cars.length; j++) {
-        if (i === j) continue;
-        const other = this.cars[j];
-        const rx = other.wx - car.wx;
-        const ry = other.wy - car.wy;
-        const projFwd = rx * fwdX + ry * fwdY;
-        if (projFwd <= 0 || projFwd > lookAhead) continue;
-
-        const projSide = Math.abs(-rx * fwdY + ry * fwdX);
-        if (projSide > 10.5) continue;
-
-        // Only follow vehicles traveling in a compatible forward direction (prevents perpendicular deadlocks)
-        const headingDot = Math.cos(other.angle) * fwdX + Math.sin(other.angle) * fwdY;
-        if (headingDot < 0.52) continue;
-
-        if (projFwd < safeGap) {
-          desiredMaxSpeed = 0;
-          blockedByVehicle = true;
+          removedCar = true;
           break;
-        } else {
-          const factor = (projFwd - safeGap) / (lookAhead - safeGap);
-          const cap = Math.min(car.maxSpeed, other.speed + factor * car.maxSpeed * 0.75);
-          if (cap < desiredMaxSpeed) {
-            desiredMaxSpeed = cap;
-            if (cap < 18) blockedByVehicle = true;
-          }
         }
-      }
 
-      // Emergency responders stuck behind slower civilian traffic gently pull around instead of sitting deadlocked
-      if (isEmergency && blockedByVehicle && car.waitSeconds > 1.7) {
-        desiredMaxSpeed = Math.max(desiredMaxSpeed, 32);
-        blockedByVehicle = false;
-      }
-
-      // 1.5 Check active Car Crash obstruction ahead on the road
-      if (
-        !car.targetCrashId &&
-        car.type !== 'ambulance' &&
-        car.type !== 'police' &&
-        car.type !== 'firetruck'
-      ) {
-        for (const crash of this.crashes) {
-          if (crash.status !== 'active') continue;
-          const rx = crash.wx - car.wx;
-          const ry = crash.wy - car.wy;
-          const projFwd = rx * fwdX + ry * fwdY;
-          if (projFwd <= 0 || projFwd > 42) continue;
-          const projSide = Math.abs(-rx * fwdY + ry * fwdX);
-          if (projSide > 16) continue;
-          if (projFwd < 25) {
-            desiredMaxSpeed = 0;
-            blockedByVehicle = true;
+        // Advance past any reached or overshot waypoints BEFORE computing steering & target
+        let targetInfo = this.getTargetWorldPos(car, car.pathIndex);
+        let toX = targetInfo.tx - car.wx;
+        let toY = targetInfo.ty - car.wy;
+        let distToTarget = Math.hypot(toX, toY);
+        let advanceGuard = 0;
+        while (car.pathIndex < car.path.length && advanceGuard < 3) {
+          const reachRadius = Math.max(11, car.speed * stepDt + 5);
+          const alongSeg =
+            toX * Math.cos(targetInfo.angle) + toY * Math.sin(targetInfo.angle);
+          const passedWaypoint = alongSeg <= 2 && distToTarget < TILE_SIZE * 1.15;
+          if (distToTarget < reachRadius || passedWaypoint) {
+            car.pathIndex += 1;
+            advanceGuard += 1;
+            if (car.pathIndex >= car.path.length) break;
+            targetInfo = this.getTargetWorldPos(car, car.pathIndex);
+            toX = targetInfo.tx - car.wx;
+            toY = targetInfo.ty - car.wy;
+            distToTarget = Math.hypot(toX, toY);
           } else {
-            desiredMaxSpeed = Math.min(desiredMaxSpeed, ((projFwd - 25) / 17) * car.maxSpeed * 0.45);
+            break;
           }
         }
 
-        // 1.6 Check Nuke Blast Craters blocking the road ahead (causes real traffic jams)
-        for (const crater of this.blastCraters) {
-          const rx = crater.wx - car.wx;
-          const ry = crater.wy - car.wy;
+        if (car.pathIndex >= car.path.length) {
+          if (!this.handleEmergencyArrival(car)) {
+            this.finishTrip(car);
+            this.cars.splice(i, 1);
+          }
+          removedCar = true;
+          break;
+        }
+
+        const segmentAngle = targetInfo.angle;
+        const desiredAngle = distToTarget > 1 ? Math.atan2(toY, toX) : segmentAngle;
+        if (!Number.isFinite(car.angle)) car.angle = desiredAngle;
+        const rawDiff = desiredAngle - car.angle;
+        const angleDiff = Number.isFinite(rawDiff)
+          ? Math.atan2(Math.sin(rawDiff), Math.cos(rawDiff))
+          : 0;
+        const turnRate = distToTarget < 18 && Math.abs(angleDiff) > 1.0 ? 18 : 13;
+        car.angle += angleDiff * Math.min(1, stepDt * turnRate);
+
+        const fwdX = Math.cos(car.angle);
+        const fwdY = Math.sin(car.angle);
+
+        // 1. Check car-following distance ahead in same lane & direction
+        const isEmergency =
+          car.type === 'ambulance' || car.type === 'police' || car.type === 'firetruck';
+        const weatherSpeedMult = isEmergency
+          ? 1
+          : this.weather === 'Storm'
+          ? 0.78
+          : this.weather === 'Rain' || this.weather === 'Snow' || this.weather === 'Foggy'
+          ? 0.88
+          : this.weather === 'Windy'
+          ? 0.94
+          : 1;
+        const curCarTile = this.getTile(
+          Math.floor(car.wx / TILE_SIZE),
+          Math.floor(car.wy / TILE_SIZE)
+        );
+        const floodMult = curCarTile?.isFlooded ? 0.52 : 1;
+        let desiredMaxSpeed = car.maxSpeed * weatherSpeedMult * floodMult;
+        let blockedByVehicle = false;
+        let blockedByHazard = false;
+        const safeGap = car.type === 'bus' ? 28 : 23;
+        const lookAhead = 48;
+
+        for (let j = 0; j < this.cars.length; j++) {
+          if (i === j) continue;
+          const other = this.cars[j];
+          const rx = other.wx - car.wx;
+          const ry = other.wy - car.wy;
           const projFwd = rx * fwdX + ry * fwdY;
-          if (projFwd <= 0 || projFwd > 44) continue;
+          if (projFwd <= 0 || projFwd > lookAhead) continue;
+
           const projSide = Math.abs(-rx * fwdY + ry * fwdX);
-          if (projSide > 17) continue;
-          if (projFwd < 26) {
+          if (projSide > 10.5) continue;
+
+          // Only follow vehicles traveling in a compatible forward direction (prevents perpendicular deadlocks)
+          const headingDot = Math.cos(other.angle) * fwdX + Math.sin(other.angle) * fwdY;
+          if (headingDot < 0.52) continue;
+
+          if (projFwd < safeGap) {
             desiredMaxSpeed = 0;
             blockedByVehicle = true;
             break;
           } else {
-            desiredMaxSpeed = Math.min(desiredMaxSpeed, ((projFwd - 26) / 18) * car.maxSpeed * 0.4);
-          }
-        }
-      }
-
-      // 2. Check upcoming intersection traffic signal & highway speed / broken bridges
-      const currTileX = Math.floor(car.wx / TILE_SIZE);
-      const currTileY = Math.floor(car.wy / TILE_SIZE);
-      if (isHighwayTile(this.tiles, currTileX, currTileY)) {
-        desiredMaxSpeed *= 1.32;
-      }
-      const inIntersectionNow = isIntersectionTile(this.tiles, currTileX, currTileY);
-      const nextPt = car.path[car.pathIndex];
-      const nextTile = this.getTile(nextPt.x, nextPt.y);
-
-      if (nextTile && nextTile.isBridgeBroken && (currTileX !== nextPt.x || currTileY !== nextPt.y)) {
-        desiredMaxSpeed = 0;
-        blockedByVehicle = true;
-      }
-
-      if (
-        !inIntersectionNow &&
-        nextTile &&
-        nextTile.hasRoad &&
-        (currTileX !== nextPt.x || currTileY !== nextPt.y) &&
-        isIntersectionTile(this.tiles, nextPt.x, nextPt.y)
-      ) {
-        const prevPt = car.path[Math.max(0, car.pathIndex - 1)];
-        const adx = Math.sign(nextPt.x - prevPt.x);
-        const ady = Math.sign(nextPt.y - prevPt.y);
-
-        if (adx !== 0 || ady !== 0) {
-          // Signed longitudinal distance to the stop line (8px outside the intersection tile)
-          const stopLineDist =
-            ((nextPt.x + 0.5) * TILE_SIZE - car.wx) * adx +
-            ((nextPt.y + 0.5) * TILE_SIZE - car.wy) * ady -
-            (TILE_SIZE * 0.5 + 8);
-
-          // Only apply signal/box checks while car is still BEFORE the stop line
-          if (stopLineDist > 0 && stopLineDist < 36) {
-            let shouldHoldAtStopLine = false;
-
-            if (
-              nextTile.intersection.controlType === 'signal' &&
-              car.type !== 'ambulance' &&
-              car.type !== 'police' &&
-              car.type !== 'firetruck'
-            ) {
-              const movingVertical = Math.abs(ady) > Math.abs(adx);
-              const aspect = this.getSignalAspect(nextTile, movingVertical ? 'NS' : 'EW');
-              if (aspect === 'red' || (aspect === 'amber' && stopLineDist > 8)) {
-                shouldHoldAtStopLine = true;
-              }
-            }
-
-            // Don't Block the Box: if exit lane beyond intersection is jammed, wait before stop line
-            if (!shouldHoldAtStopLine && stopLineDist < 16 && car.pathIndex + 1 < car.path.length) {
-              const exitPt = car.path[car.pathIndex + 1];
-              const edx = Math.sign(exitPt.x - nextPt.x);
-              const edy = Math.sign(exitPt.y - nextPt.y);
-              const exitAngle = Math.atan2(edy, edx);
-              const exitRightX = -Math.sin(exitAngle) * LANE_OFFSET;
-              const exitRightY = Math.cos(exitAngle) * LANE_OFFSET;
-              const exitEntryX = (exitPt.x + 0.5) * TILE_SIZE + exitRightX;
-              const exitEntryY = (exitPt.y + 0.5) * TILE_SIZE + exitRightY;
-
-              for (let j = 0; j < this.cars.length; j++) {
-                if (i === j) continue;
-                const other = this.cars[j];
-                const sameExitDir =
-                  Math.cos(other.angle) * edx + Math.sin(other.angle) * edy > 0.5;
-                if (
-                  sameExitDir &&
-                  other.speed < 10 &&
-                  Math.hypot(other.wx - exitEntryX, other.wy - exitEntryY) < 22
-                ) {
-                  shouldHoldAtStopLine = true;
-                  break;
-                }
-              }
-            }
-
-            if (shouldHoldAtStopLine) {
-              if (stopLineDist < 7) {
-                desiredMaxSpeed = 0;
-              } else {
-                desiredMaxSpeed = Math.min(desiredMaxSpeed, (stopLineDist / 36) * car.maxSpeed * 0.55);
-              }
+            const factor = (projFwd - safeGap) / (lookAhead - safeGap);
+            const cap = Math.min(car.maxSpeed, other.speed + factor * car.maxSpeed * 0.75);
+            if (cap < desiredMaxSpeed) {
+              desiredMaxSpeed = cap;
+              if (cap < 18) blockedByVehicle = true;
             }
           }
         }
-      }
 
-      // 2.5 Yield to anyone crossing on upcoming Zebra Crossing
-      if (
-        nextTile &&
-        nextTile.hasRoad &&
-        nextTile.hasZebraCrossing &&
-        (currTileX !== nextPt.x || currTileY !== nextPt.y) &&
-        car.type !== 'ambulance' &&
-        car.type !== 'police' &&
-        car.type !== 'firetruck'
-      ) {
-        const hasPedestrianOnCrossing = this.people.some((p) => {
-          const ptx = Math.floor(p.wx / TILE_SIZE);
-          const pty = Math.floor(p.wy / TILE_SIZE);
-          if (ptx === nextPt.x && pty === nextPt.y) return true;
-          if (p.role === 'pedestrian' && p.targetTileX === nextPt.x && p.targetTileY === nextPt.y) {
-            return true;
-          }
-          if (p.pedestrianPath && p.pedestrianPathIndex !== undefined) {
-            const nextWp = p.pedestrianPath[p.pedestrianPathIndex];
-            if (
-              nextWp &&
-              nextWp.x === nextPt.x &&
-              nextWp.y === nextPt.y &&
-              Math.hypot((nextPt.x + 0.5) * TILE_SIZE - p.wx, (nextPt.y + 0.5) * TILE_SIZE - p.wy) <
-                TILE_SIZE * 0.72
-            ) {
-              return true;
+        // Emergency responders stuck behind slower civilian traffic gently pull around instead of sitting deadlocked
+        if (isEmergency && blockedByVehicle && car.waitSeconds > 1.7) {
+          desiredMaxSpeed = Math.max(desiredMaxSpeed, 32);
+          blockedByVehicle = false;
+        }
+
+        // 1.5 Check active Car Crash obstruction ahead on the road
+        if (
+          !car.targetCrashId &&
+          car.type !== 'ambulance' &&
+          car.type !== 'police' &&
+          car.type !== 'firetruck'
+        ) {
+          for (const crash of this.crashes) {
+            if (crash.status !== 'active') continue;
+            const rx = crash.wx - car.wx;
+            const ry = crash.wy - car.wy;
+            const projFwd = rx * fwdX + ry * fwdY;
+            if (projFwd <= 0 || projFwd > 42) continue;
+            const projSide = Math.abs(-rx * fwdY + ry * fwdX);
+            if (projSide > 16) continue;
+            if (projFwd < 25) {
+              desiredMaxSpeed = 0;
+              blockedByVehicle = true;
+              blockedByHazard = true;
+            } else {
+              desiredMaxSpeed = Math.min(
+                desiredMaxSpeed,
+                ((projFwd - 25) / 17) * car.maxSpeed * 0.45
+              );
             }
           }
-          return false;
-        });
-        if (hasPedestrianOnCrossing) {
+
+          // 1.6 Check Nuke Blast Craters blocking the road ahead (causes real traffic jams)
+          for (const crater of this.blastCraters) {
+            const rx = crater.wx - car.wx;
+            const ry = crater.wy - car.wy;
+            const projFwd = rx * fwdX + ry * fwdY;
+            if (projFwd <= 0 || projFwd > 44) continue;
+            const projSide = Math.abs(-rx * fwdY + ry * fwdX);
+            if (projSide > 17) continue;
+            if (projFwd < 26) {
+              desiredMaxSpeed = 0;
+              blockedByVehicle = true;
+              blockedByHazard = true;
+              break;
+            } else {
+              desiredMaxSpeed = Math.min(
+                desiredMaxSpeed,
+                ((projFwd - 26) / 18) * car.maxSpeed * 0.4
+              );
+            }
+          }
+        }
+
+        // 2. Check upcoming intersection traffic signal & highway speed / broken bridges
+        const currTileX = Math.floor(car.wx / TILE_SIZE);
+        const currTileY = Math.floor(car.wy / TILE_SIZE);
+        if (isHighwayTile(this.tiles, currTileX, currTileY)) {
+          desiredMaxSpeed *= 1.32;
+        }
+        const inIntersectionNow = this.isIntersectionTile(this.tiles, currTileX, currTileY);
+        const nextPt = car.path[car.pathIndex];
+        const nextTile = this.getTile(nextPt.x, nextPt.y);
+
+        // If a road tile along the middle of the path was bulldozed, abort trip cleanly instead of stalling forever
+        if (car.pathIndex < car.path.length - 1 && (!nextTile || !nextTile.hasRoad)) {
+          if (!this.handleEmergencyArrival(car)) {
+            this.finishTrip(car);
+            this.cars.splice(i, 1);
+          }
+          removedCar = true;
+          break;
+        }
+
+        if (
+          nextTile &&
+          nextTile.isBridgeBroken &&
+          (currTileX !== nextPt.x || currTileY !== nextPt.y)
+        ) {
+          desiredMaxSpeed = 0;
+          blockedByVehicle = true;
+          blockedByHazard = true;
+        }
+
+        if (
+          !inIntersectionNow &&
+          nextTile &&
+          nextTile.hasRoad &&
+          (currTileX !== nextPt.x || currTileY !== nextPt.y) &&
+          this.isIntersectionTile(this.tiles, nextPt.x, nextPt.y)
+        ) {
           const prevPt = car.path[Math.max(0, car.pathIndex - 1)];
           const adx = Math.sign(nextPt.x - prevPt.x);
           const ady = Math.sign(nextPt.y - prevPt.y);
+
           if (adx !== 0 || ady !== 0) {
-            const zebraDist =
+            // Signed longitudinal distance to the stop line (8px outside the intersection tile)
+            const stopLineDist =
               ((nextPt.x + 0.5) * TILE_SIZE - car.wx) * adx +
               ((nextPt.y + 0.5) * TILE_SIZE - car.wy) * ady -
-              (TILE_SIZE * 0.5 + 6);
-            if (zebraDist > 0 && zebraDist < 30) {
-              if (zebraDist < 7) {
-                desiredMaxSpeed = 0;
-              } else {
-                desiredMaxSpeed = Math.min(desiredMaxSpeed, (zebraDist / 30) * car.maxSpeed * 0.5);
+              (TILE_SIZE * 0.5 + 8);
+
+            // Only apply signal/box checks while car is still BEFORE the stop line
+            if (stopLineDist > 0 && stopLineDist < 36) {
+              let shouldHoldAtStopLine = false;
+
+              if (
+                nextTile.intersection.controlType === 'signal' &&
+                car.type !== 'ambulance' &&
+                car.type !== 'police' &&
+                car.type !== 'firetruck' &&
+                car.waitSeconds < 5.0
+              ) {
+                const movingVertical = Math.abs(ady) > Math.abs(adx);
+                const aspect = this.getSignalAspect(nextTile, movingVertical ? 'NS' : 'EW');
+                if (aspect === 'red' || (aspect === 'amber' && stopLineDist > 8)) {
+                  shouldHoldAtStopLine = true;
+                }
+              }
+
+              // Don't Block the Box: if exit lane beyond intersection is jammed, wait before stop line
+              if (
+                !shouldHoldAtStopLine &&
+                stopLineDist < 16 &&
+                car.waitSeconds < 5.5 &&
+                car.pathIndex + 1 < car.path.length
+              ) {
+                const exitPt = car.path[car.pathIndex + 1];
+                const edx = Math.sign(exitPt.x - nextPt.x);
+                const edy = Math.sign(exitPt.y - nextPt.y);
+                const exitAngle = Math.atan2(edy, edx);
+                const exitRightX = -Math.sin(exitAngle) * LANE_OFFSET;
+                const exitRightY = Math.cos(exitAngle) * LANE_OFFSET;
+                const exitEntryX = (exitPt.x + 0.5) * TILE_SIZE + exitRightX;
+                const exitEntryY = (exitPt.y + 0.5) * TILE_SIZE + exitRightY;
+
+                for (let j = 0; j < this.cars.length; j++) {
+                  if (i === j) continue;
+                  const other = this.cars[j];
+                  const sameExitDir =
+                    Math.cos(other.angle) * edx + Math.sin(other.angle) * edy > 0.5;
+                  if (
+                    sameExitDir &&
+                    other.speed < 10 &&
+                    Math.hypot(other.wx - exitEntryX, other.wy - exitEntryY) < 22
+                  ) {
+                    shouldHoldAtStopLine = true;
+                    break;
+                  }
+                }
+              }
+
+              if (shouldHoldAtStopLine) {
+                if (stopLineDist < 7) {
+                  desiredMaxSpeed = 0;
+                } else {
+                  desiredMaxSpeed = Math.min(
+                    desiredMaxSpeed,
+                    (stopLineDist / 36) * car.maxSpeed * 0.55
+                  );
+                }
               }
             }
           }
         }
-      }
 
-      // Anti-stall guarantee: a car inside an intersection must always clear the box
-      if (inIntersectionNow && car.waitSeconds > 1.2) {
-        desiredMaxSpeed = Math.max(desiredMaxSpeed, 28);
-      }
-
-      // Accelerate or brake smoothly
-      if (car.speed < desiredMaxSpeed) {
-        car.speed = Math.min(desiredMaxSpeed, car.speed + 58 * dt);
-        car.isBraking = false;
-      } else if (car.speed > desiredMaxSpeed) {
-        car.speed = Math.max(desiredMaxSpeed, car.speed - 130 * dt);
-        car.isBraking = true;
-      } else {
-        car.isBraking = desiredMaxSpeed < 5;
-      }
-
-      if (car.speed < 4) {
-        car.waitSeconds += dt;
-        if (car.waitSeconds > 4.0 && blockedByVehicle) {
-          if (!car.isJammed) {
-            car.isJammed = true;
-            if (Math.random() < 0.25) {
-              car.hornFlash = 0.6;
-              this.honkRipples.push({ wx: car.wx, wy: car.wy, age: 0, maxAge: 0.75 });
-              if (playAudio) soundEngine.playSoftHorn();
+        // 2.5 Yield to anyone crossing on upcoming Zebra Crossing (skip after 4s wait to avoid stalemate)
+        if (
+          nextTile &&
+          nextTile.hasRoad &&
+          nextTile.hasZebraCrossing &&
+          car.waitSeconds < 4.0 &&
+          (currTileX !== nextPt.x || currTileY !== nextPt.y) &&
+          car.type !== 'ambulance' &&
+          car.type !== 'police' &&
+          car.type !== 'firetruck'
+        ) {
+          const hasPedestrianOnCrossing = this.people.some((p) => {
+            const ptx = Math.floor(p.wx / TILE_SIZE);
+            const pty = Math.floor(p.wy / TILE_SIZE);
+            if (ptx === nextPt.x && pty === nextPt.y) return true;
+            if (
+              p.role === 'pedestrian' &&
+              p.targetTileX === nextPt.x &&
+              p.targetTileY === nextPt.y
+            ) {
+              return true;
+            }
+            if (p.pedestrianPath && p.pedestrianPathIndex !== undefined) {
+              const nextWp = p.pedestrianPath[p.pedestrianPathIndex];
+              if (
+                nextWp &&
+                nextWp.x === nextPt.x &&
+                nextWp.y === nextPt.y &&
+                Math.hypot(
+                  (nextPt.x + 0.5) * TILE_SIZE - p.wx,
+                  (nextPt.y + 0.5) * TILE_SIZE - p.wy
+                ) <
+                  TILE_SIZE * 0.72
+              ) {
+                return true;
+              }
+            }
+            return false;
+          });
+          if (hasPedestrianOnCrossing) {
+            const prevPt = car.path[Math.max(0, car.pathIndex - 1)];
+            const adx = Math.sign(nextPt.x - prevPt.x);
+            const ady = Math.sign(nextPt.y - prevPt.y);
+            if (adx !== 0 || ady !== 0) {
+              const zebraDist =
+                ((nextPt.x + 0.5) * TILE_SIZE - car.wx) * adx +
+                ((nextPt.y + 0.5) * TILE_SIZE - car.wy) * ady -
+                (TILE_SIZE * 0.5 + 6);
+              if (zebraDist > 0 && zebraDist < 30) {
+                if (zebraDist < 7) {
+                  desiredMaxSpeed = 0;
+                } else {
+                  desiredMaxSpeed = Math.min(
+                    desiredMaxSpeed,
+                    (zebraDist / 30) * car.maxSpeed * 0.5
+                  );
+                }
+              }
             }
           }
         }
-      } else {
-        car.waitSeconds = Math.max(0, car.waitSeconds - dt * 1.8);
-        if (car.waitSeconds < 1.2) car.isJammed = false;
+
+        // Anti-stall guarantee: clear intersections & resolve non-hazard traffic deadlocks at high speed
+        if (inIntersectionNow && car.waitSeconds > 1.2) {
+          desiredMaxSpeed = Math.max(desiredMaxSpeed, 30);
+        }
+        if (!blockedByHazard && car.waitSeconds > 7.5) {
+          desiredMaxSpeed = Math.max(desiredMaxSpeed, 26);
+        }
+
+        // Accelerate or brake smoothly
+        if (car.speed < desiredMaxSpeed) {
+          car.speed = Math.min(desiredMaxSpeed, car.speed + 58 * stepDt);
+          car.isBraking = false;
+        } else if (car.speed > desiredMaxSpeed) {
+          car.speed = Math.max(desiredMaxSpeed, car.speed - 130 * stepDt);
+          car.isBraking = true;
+        } else {
+          car.isBraking = desiredMaxSpeed < 5;
+        }
+
+        if (car.speed < 4) {
+          car.waitSeconds += stepDt;
+          if (car.waitSeconds > 4.0 && blockedByVehicle) {
+            if (!car.isJammed) {
+              car.isJammed = true;
+              if (Math.random() < 0.25) {
+                car.hornFlash = 0.6;
+                this.honkRipples.push({ wx: car.wx, wy: car.wy, age: 0, maxAge: 0.75 });
+                if (playAudio) soundEngine.playSoftHorn();
+              }
+            }
+          }
+          // Hard deadlock recovery if a car remains frozen for >14s (unless waiting behind an active hazard)
+          if (!blockedByHazard && car.waitSeconds > 14.0) {
+            if (!this.handleEmergencyArrival(car)) {
+              this.finishTrip(car);
+              this.cars.splice(i, 1);
+            }
+            removedCar = true;
+            break;
+          }
+        } else {
+          car.waitSeconds = Math.max(0, car.waitSeconds - stepDt * 1.8);
+          if (car.waitSeconds < 1.2) car.isJammed = false;
+        }
+
+        // Advance position (clamp final-waypoint step so cars never overshoot destination)
+        const moveStep =
+          car.pathIndex === car.path.length - 1
+            ? Math.min(car.speed * stepDt, distToTarget + 4)
+            : car.speed * stepDt;
+        car.wx += Math.cos(car.angle) * moveStep;
+        car.wy += Math.sin(car.angle) * moveStep;
       }
 
-      // Advance position
-      car.wx += Math.cos(car.angle) * car.speed * dt;
-      car.wy += Math.sin(car.angle) * car.speed * dt;
+      if (removedCar) continue;
 
       // Occasional car-vs-pedestrian collision when a fast car fails to stop on a non-crossing road
+      const fwdX = Math.cos(car.angle);
+      const fwdY = Math.sin(car.angle);
       if (
-        !isEmergency &&
+        !car.targetCrashId &&
+        car.type !== 'ambulance' &&
+        car.type !== 'police' &&
+        car.type !== 'firetruck' &&
         car.type !== 'hearse' &&
         car.speed > 38 &&
         this.carPedHitCooldown <= 0
@@ -2085,14 +2901,14 @@ export class CitySimulation {
       ) {
         const station = this.buildingsList.find((b) => b.id === car.returnStationId);
         if (station) {
-          const currTileX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(car.wx / TILE_SIZE)));
-          const currTileY = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(car.wy / TILE_SIZE)));
+          const currTileX = Math.max(0, Math.min(this.gridCols - 1, Math.floor(car.wx / TILE_SIZE)));
+          const currTileY = Math.max(0, Math.min(this.gridRows - 1, Math.floor(car.wy / TILE_SIZE)));
           const startRoad =
-            findAdjacentRoadTile(this.tiles, currTileX, currTileY) ||
+            this.findAdjacentRoadTile(this.tiles, currTileX, currTileY) ||
             (this.getTile(currTileX, currTileY)?.hasRoad ? { x: currTileX, y: currTileY } : null);
-          const stationRoad = findAdjacentRoadTile(this.tiles, station.x, station.y);
+          const stationRoad = this.findAdjacentRoadTile(this.tiles, station.x, station.y);
           if (startRoad && stationRoad) {
-            const roadPath = findRoadPath(this.tiles, startRoad, stationRoad, 0.8);
+            const roadPath = this.findRoadPath(this.tiles, startRoad, stationRoad, 0.8);
             if (roadPath && roadPath.length >= 1) {
               car.path = [...roadPath, { x: station.x, y: station.y }];
               car.pathIndex = 0;
@@ -2189,17 +3005,17 @@ export class CitySimulation {
     const firstTarget = jail || station;
     if (!firstTarget) return false;
 
-    const currTileX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(car.wx / TILE_SIZE)));
-    const currTileY = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(car.wy / TILE_SIZE)));
+    const currTileX = Math.max(0, Math.min(this.gridCols - 1, Math.floor(car.wx / TILE_SIZE)));
+    const currTileY = Math.max(0, Math.min(this.gridRows - 1, Math.floor(car.wy / TILE_SIZE)));
     const currTile = this.getTile(currTileX, currTileY);
     const startRoad =
       currTile && currTile.hasRoad
         ? { x: currTileX, y: currTileY }
-        : findAdjacentRoadTile(this.tiles, currTileX, currTileY);
-    const destRoad = findAdjacentRoadTile(this.tiles, firstTarget.x, firstTarget.y);
+        : this.findAdjacentRoadTile(this.tiles, currTileX, currTileY);
+    const destRoad = this.findAdjacentRoadTile(this.tiles, firstTarget.x, firstTarget.y);
     if (!startRoad || !destRoad) return false;
 
-    const roadPath = findRoadPath(this.tiles, startRoad, destRoad, 0.9);
+    const roadPath = this.findRoadPath(this.tiles, startRoad, destRoad, 0.9);
     if (!roadPath || roadPath.length === 0) return false;
 
     car.isReturningToStation = true;
@@ -2386,11 +3202,11 @@ export class CitySimulation {
     const walkerOrigins = this.buildingsList.filter((b) => b.category !== 'road_path');
     const desiredPeds =
       !curfew && !isWarPanic && walkerOrigins.length >= 2
-        ? Math.min(6, Math.max(2, Math.floor(walkerOrigins.length / 4)))
+        ? Math.min(8, Math.max(2, Math.floor(walkerOrigins.length / 3)))
         : 0;
     if (activePeds.length < desiredPeds) {
       this.pedestrianSpawnAccumulator += simDt;
-      if (this.pedestrianSpawnAccumulator >= 3.2) {
+      if (this.pedestrianSpawnAccumulator >= 2.8) {
         this.pedestrianSpawnAccumulator = 0;
         this.spawnBuildingPedestrian();
       }
@@ -2414,7 +3230,7 @@ export class CitySimulation {
           if (res === 'arrived') {
             if (p.destBuildingId) {
               const dest = this.buildingsList.find((b) => b.id === p.destBuildingId);
-              if (dest) dest.totalVisits += 1;
+              if (dest && dest.category !== 'cemetery') this.incrementBuildingOccupancy(dest, 1);
             }
             p.state = 'idling';
             p.holdTimer = 1.6 + Math.random() * 1.4;
@@ -2426,7 +3242,9 @@ export class CitySimulation {
           if (p.holdTimer <= 0) {
             if (p.destBuildingId) {
               const dest = this.buildingsList.find((b) => b.id === p.destBuildingId);
-              if (dest) dest.totalVisits = Math.max(0, dest.totalVisits - 1);
+              if (dest && dest.category !== 'cemetery') {
+                dest.totalVisits = Math.max(0, dest.totalVisits - 1);
+              }
             }
             if (!this.assignReturnRoute(p)) {
               this.people.splice(i, 1);
@@ -2438,7 +3256,7 @@ export class CitySimulation {
           if (res === 'arrived') {
             if (p.homeBuildingId) {
               const home = this.buildingsList.find((b) => b.id === p.homeBuildingId);
-              if (home) home.totalVisits += 1;
+              if (home && home.category !== 'cemetery') this.incrementBuildingOccupancy(home, 1);
             }
             this.people.splice(i, 1);
           } else if (res === 'blocked' || p.holdTimer <= 0) {
@@ -2750,14 +3568,14 @@ export class CitySimulation {
     allowFrozenWater = false,
     allowAllTerrain = false
   ): GridPoint | null {
-    const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(wx / TILE_SIZE)));
-    const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(wy / TILE_SIZE)));
+    const tx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(wx / TILE_SIZE)));
+    const ty = Math.max(0, Math.min(this.gridRows - 1, Math.floor(wy / TILE_SIZE)));
     if (allowAllTerrain) return { x: tx, y: ty };
     const tile = this.getTile(tx, ty);
     if (tile && isPedestrianTileWalkable(tile, allowFrozenWater, allowAllTerrain)) {
       return { x: tx, y: ty };
     }
-    return findNearestWalkableTile(this.tiles, tx, ty, 3, allowFrozenWater);
+    return this.findNearestWalkableTile(this.tiles, tx, ty, 3, allowFrozenWater);
   }
 
   private assignPedestrianRoute(
@@ -2771,7 +3589,7 @@ export class CitySimulation {
     const allowAll = p.role === 'invader' || (p.role === 'soldier' && this.crises.warActive);
     const startPt = this.getCurrentWalkableStart(p.wx, p.wy, allowFrozen, allowAll);
     if (!startPt) return false;
-    const path = findPedestrianPath(
+    const path = this.findPedestrianPath(
       this.tiles,
       startPt,
       { x: destTileX, y: destTileY },
@@ -2820,8 +3638,8 @@ export class CitySimulation {
     const allowFrozen = this.canPersonSkateOnFrozenWater(p);
     const allowAll = p.role === 'invader' || (p.role === 'soldier' && this.crises.warActive);
     // If person is stranded on a newly paved unmarked road or water tile, step back to adjacent walkable tile
-    const curTx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(p.wx / TILE_SIZE)));
-    const curTy = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(p.wy / TILE_SIZE)));
+    const curTx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(p.wx / TILE_SIZE)));
+    const curTy = Math.max(0, Math.min(this.gridRows - 1, Math.floor(p.wy / TILE_SIZE)));
     const curTile = this.getTile(curTx, curTy);
     if (!allowAll && curTile && !isPedestrianTileWalkable(curTile, allowFrozen)) {
       const prevIdx = Math.max(0, (p.pedestrianPathIndex ?? 1) - 1);
@@ -2830,7 +3648,7 @@ export class CitySimulation {
       const safe =
         prevTile && isPedestrianTileWalkable(prevTile, allowFrozen)
           ? prevWp!
-          : findNearestWalkableTile(this.tiles, curTx, curTy, 1, allowFrozen);
+          : this.findNearestWalkableTile(this.tiles, curTx, curTy, 1, allowFrozen);
       if (!safe) return 'blocked';
       p.wx = (safe.x + 0.5) * TILE_SIZE;
       p.wy = (safe.y + 0.5) * TILE_SIZE;
@@ -2881,8 +3699,8 @@ export class CitySimulation {
         const step = Math.min(dist, effectiveSpeed * realDt);
         const nextWx = p.wx + (dx / dist) * step;
         const nextWy = p.wy + (dy / dist) * step;
-        const nextTx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(nextWx / TILE_SIZE)));
-        const nextTy = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(nextWy / TILE_SIZE)));
+        const nextTx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(nextWx / TILE_SIZE)));
+        const nextTy = Math.max(0, Math.min(this.gridRows - 1, Math.floor(nextWy / TILE_SIZE)));
         if (!allowAll && (nextTx !== curTx || nextTy !== curTy)) {
           const nextTile = this.getTile(nextTx, nextTy);
           if (!this.canPersonStepOntoTile(nextTile, p.targetTileX, p.targetTileY, allowFrozen)) {
@@ -2936,7 +3754,7 @@ export class CitySimulation {
     if (p.homeBuildingId) {
       const home = this.buildingsList.find((b) => b.id === p.homeBuildingId);
       if (home) {
-        const path = findPedestrianPath(this.tiles, startPt, { x: home.x, y: home.y }, allowFrozen, allowAll);
+        const path = this.findPedestrianPath(this.tiles, startPt, { x: home.x, y: home.y }, allowFrozen, allowAll);
         if (path) {
           p.state = 'returning';
           p.holdTimer = 18;
@@ -2964,7 +3782,7 @@ export class CitySimulation {
     }
     candidates.sort(() => Math.random() - 0.5);
     for (const c of candidates.slice(0, 8)) {
-      const path = findPedestrianPath(this.tiles, startPt, { x: c.x, y: c.y }, allowFrozen);
+      const path = this.findPedestrianPath(this.tiles, startPt, { x: c.x, y: c.y }, allowFrozen);
       if (path) {
         p.state = 'returning';
         p.holdTimer = 4.5;
@@ -3006,7 +3824,7 @@ export class CitySimulation {
       .sort((a, b) => Math.hypot(a.x - target.x, a.y - target.y) - Math.hypot(b.x - target.x, b.y - target.y));
 
     for (const h of homeCandidates.slice(0, 8)) {
-      const candidatePath = findPedestrianPath(this.tiles, { x: h.x, y: h.y }, { x: target.x, y: target.y });
+      const candidatePath = this.findPedestrianPath(this.tiles, { x: h.x, y: h.y }, { x: target.x, y: target.y });
       if (candidatePath) {
         spawnBuilding = h;
         path = candidatePath;
@@ -3051,7 +3869,7 @@ export class CitySimulation {
     );
 
     for (const candidate of forestTiles.slice(0, 12)) {
-      const path = findPedestrianPath(this.tiles, startPt, { x: candidate.x, y: candidate.y });
+      const path = this.findPedestrianPath(this.tiles, startPt, { x: candidate.x, y: candidate.y });
       if (path) {
         woodcutter.targetTileX = candidate.x;
         woodcutter.targetTileY = candidate.y;
@@ -3104,13 +3922,19 @@ export class CitySimulation {
 
     // 3. Spawn Small Business & Market Stall Shoppers walking from homes (disabled during curfew or War)
     const houses = this.buildingsList.filter((b) => b.category === 'residential');
+    const storesOpen = this.isStoreOpen();
     const shops = this.buildingsList.filter(
-      (b) => b.category === 'commercial' || b.category === 'visit_spot'
+      (b) => (storesOpen && b.category === 'commercial') || b.category === 'visit_spot'
     );
     const activeShoppers = this.people.filter((p) => p.role === 'shopper');
+    const crowdLimited = this.people.length >= 115;
     const povertyFactor = this.crises.povertyActive ? 0.55 : 1.0;
     const maxShoppers =
-      !curfew && !isWarPanic && houses.length > 0 && (shops.length > 0 || this.marketStalls.length > 0)
+      !curfew &&
+      !isWarPanic &&
+      !crowdLimited &&
+      houses.length > 0 &&
+      (shops.length > 0 || this.marketStalls.length > 0)
         ? Math.max(
             1,
             Math.round(
@@ -3435,6 +4259,8 @@ export class CitySimulation {
                   ? 'clothes'
                   : stall.goods === 'produce'
                   ? 'produce'
+                  : stall.goods === 'meat'
+                  ? 'meat'
                   : 'bag';
               const taintedFish =
                 stall.goods === 'fish' &&
@@ -3489,6 +4315,8 @@ export class CitySimulation {
                     ? 'Bought Clothes!'
                     : stall.goods === 'produce'
                     ? 'Bought Produce!'
+                    : stall.goods === 'meat'
+                    ? 'Bought Meat!'
                     : stall.goods === 'kayak'
                     ? 'Kayak Pass!'
                     : stall.goods === 'rowboat'
@@ -3516,7 +4344,7 @@ export class CitySimulation {
               this.people.splice(i, 1);
               continue;
             }
-            shop.totalVisits += 1;
+            this.incrementBuildingOccupancy(shop, 1);
             p.carryingItem = this.getItemForShop(shop);
             if (
               shop.blueprintId === 'tackle_shop' &&
@@ -3568,7 +4396,7 @@ export class CitySimulation {
           if (res === 'arrived') {
             if (p.homeBuildingId) {
               const home = this.buildingsList.find((b) => b.id === p.homeBuildingId);
-              if (home) home.totalVisits += 1;
+              if (home && home.category !== 'cemetery') this.incrementBuildingOccupancy(home, 1);
             }
             this.people.splice(i, 1);
           } else if (res === 'blocked' || p.holdTimer <= 0) {
@@ -3584,6 +4412,7 @@ export class CitySimulation {
     if (shop.blueprintId === 'bookshop') return 'books';
     if (shop.blueprintId === 'flower_shop') return 'flowers';
     if (shop.blueprintId === 'tackle_shop') return 'fish';
+    if (shop.blueprintId === 'electronics_shop') return 'electronics';
     return 'bag';
   }
 
@@ -3636,7 +4465,7 @@ export class CitySimulation {
     let path: GridPoint[] | null = null;
 
     for (const orig of origins.slice(0, 10)) {
-      const candidatePath = findPedestrianPath(
+      const candidatePath = this.findPedestrianPath(
         this.tiles,
         { x: orig.x, y: orig.y },
         { x: pick.tile.x, y: pick.tile.y }
@@ -3830,7 +4659,7 @@ export class CitySimulation {
     const allowFrozen = hobbyKind === 'ice_skating' && this.season === 'Winter';
 
     for (const h of homes.slice(0, 10)) {
-      const p = findPedestrianPath(this.tiles, { x: h.x, y: h.y }, { x: target.x, y: target.y }, allowFrozen);
+      const p = this.findPedestrianPath(this.tiles, { x: h.x, y: h.y }, { x: target.x, y: target.y }, allowFrozen);
       if (p) {
         originBuilding = h;
         path = p;
@@ -3868,7 +4697,7 @@ export class CitySimulation {
         .find((nt): nt is MapTile => Boolean(nt && nt.terrain === 'grass' && !nt.hasRoad && !nt.building));
       if (partnerTarget) {
         for (const h of homes.slice(0, 6)) {
-          const p2 = findPedestrianPath(this.tiles, { x: h.x, y: h.y }, { x: partnerTarget.x, y: partnerTarget.y });
+          const p2 = this.findPedestrianPath(this.tiles, { x: h.x, y: h.y }, { x: partnerTarget.x, y: partnerTarget.y });
           if (p2) {
             partnerOrigin = h;
             partnerPath = p2;
@@ -3937,7 +4766,7 @@ export class CitySimulation {
           (a, b) => Math.hypot(a.x - home.x, a.y - home.y) - Math.hypot(b.x - home.x, b.y - home.y)
         );
         for (const stall of sortedStalls.slice(0, 4)) {
-          const path = findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: stall.x, y: stall.y });
+          const path = this.findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: stall.x, y: stall.y });
           if (path) {
             const shirts = ['#EC4899', '#0EA5E9', '#10B981', '#F59E0B', '#8B5CF6', '#FB7185'];
             this.people.push({
@@ -3970,7 +4799,7 @@ export class CitySimulation {
       );
       const candidates = sortedShops.slice(0, Math.min(5, sortedShops.length)).sort(() => Math.random() - 0.5);
       for (const shop of candidates) {
-        const path = findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: shop.x, y: shop.y });
+        const path = this.findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: shop.x, y: shop.y });
         if (path) {
           const shirts = ['#EC4899', '#0EA5E9', '#10B981', '#F59E0B', '#8B5CF6', '#FB7185'];
           home.totalVisits = Math.max(0, home.totalVisits - 1);
@@ -4013,7 +4842,7 @@ export class CitySimulation {
         .slice(0, 6);
 
       for (const dest of destPool) {
-        const path = findPedestrianPath(this.tiles, { x: origin.x, y: origin.y }, { x: dest.x, y: dest.y });
+        const path = this.findPedestrianPath(this.tiles, { x: origin.x, y: origin.y }, { x: dest.x, y: dest.y });
         if (path && path.length >= 2) {
           origin.totalVisits = Math.max(0, origin.totalVisits - 1);
           this.people.push({
@@ -4072,7 +4901,7 @@ export class CitySimulation {
     );
     const slice = candidates.slice(0, 12).sort(() => Math.random() - 0.5);
     for (const tile of slice) {
-      const path = findPedestrianPath(this.tiles, startPt, { x: tile.x, y: tile.y });
+      const path = this.findPedestrianPath(this.tiles, startPt, { x: tile.x, y: tile.y });
       if (path) return { tile, path };
     }
     return null;
@@ -4084,7 +4913,7 @@ export class CitySimulation {
     this.totalJailed += count;
     const jail = this.buildingsList.find((b) => b.category === 'jail');
     if (jail) {
-      jail.totalVisits += count;
+      this.incrementBuildingOccupancy(jail, count);
       this.floatingLabels.push({
         wx: (jail.x + 0.5) * TILE_SIZE,
         wy: (jail.y + 0.25) * TILE_SIZE,
@@ -4100,18 +4929,18 @@ export class CitySimulation {
   private dispatchPoliceToEscapee(escapee: Person): boolean {
     const stations = this.buildingsList.filter((b) => b.category === 'police');
     if (stations.length === 0) return false;
-    const escX = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(escapee.wx / TILE_SIZE)));
-    const escY = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(escapee.wy / TILE_SIZE)));
-    const destRoad = findAdjacentRoadTile(this.tiles, escX, escY);
+    const escX = Math.max(0, Math.min(this.gridCols - 1, Math.floor(escapee.wx / TILE_SIZE)));
+    const escY = Math.max(0, Math.min(this.gridRows - 1, Math.floor(escapee.wy / TILE_SIZE)));
+    const destRoad = this.findAdjacentRoadTile(this.tiles, escX, escY);
     if (!destRoad) return false;
 
     const sorted = [...stations].sort(
       (a, b) => Math.hypot(a.x - escX, a.y - escY) - Math.hypot(b.x - escX, b.y - escY)
     );
     for (const st of sorted) {
-      const startRoad = findAdjacentRoadTile(this.tiles, st.x, st.y);
+      const startRoad = this.findAdjacentRoadTile(this.tiles, st.x, st.y);
       if (!startRoad) continue;
-      const path = findRoadPath(this.tiles, startRoad, destRoad, 0.8);
+      const path = this.findRoadPath(this.tiles, startRoad, destRoad, 0.8);
       if (!path || path.length < 1) continue;
 
       const fullPath: GridPoint[] = [{ x: st.x, y: st.y }, ...path];
@@ -4157,7 +4986,7 @@ export class CitySimulation {
     // 45% chance to target a market stall or park/school to vandalize, else rob a commercial/residential building
     if (this.marketStalls.length > 0 && Math.random() < 0.45) {
       const st = this.marketStalls[Math.floor(Math.random() * this.marketStalls.length)];
-      const path = findPedestrianPath(this.tiles, startPt, { x: st.x, y: st.y });
+      const path = this.findPedestrianPath(this.tiles, startPt, { x: st.x, y: st.y });
       if (path) {
         esc.destStallId = st.id;
         esc.destBuildingId = undefined;
@@ -4182,7 +5011,7 @@ export class CitySimulation {
       .sort(() => Math.random() - 0.5);
 
     for (const dest of targets.slice(0, 6)) {
-      const path = findPedestrianPath(this.tiles, startPt, { x: dest.x, y: dest.y });
+      const path = this.findPedestrianPath(this.tiles, startPt, { x: dest.x, y: dest.y });
       if (path) {
         esc.destBuildingId = dest.id;
         esc.destStallId = undefined;
@@ -4372,7 +5201,7 @@ export class CitySimulation {
     });
 
     for (const dest of destinations.slice(0, 6)) {
-      const path = findPedestrianPath(this.tiles, { x: jail.x, y: jail.y }, { x: dest.x, y: dest.y });
+      const path = this.findPedestrianPath(this.tiles, { x: jail.x, y: jail.y }, { x: dest.x, y: dest.y });
       if (path && path.length >= 2) {
         this.people.push({
           id: `ppl_${this.personIdCounter++}`,
@@ -4451,6 +5280,22 @@ export class CitySimulation {
 
     // 2. Spawn Vendors setting up pop-up stalls in empty grass areas (paused during curfew)
     const maxStalls = curfew ? 0 : this.crises.povertyActive ? 7 : 5;
+    const hasMeatStall = this.marketStalls.some((s) => s.goods === 'meat');
+    const hasMeatVendorEnRoute = this.people.some(
+      (p) => p.role === 'vendor' && p.stallGoods === 'meat'
+    );
+    if (
+      !curfew &&
+      this.butcherMeatReserve > 0 &&
+      !hasMeatStall &&
+      !hasMeatVendorEnRoute &&
+      this.marketStalls.length < maxStalls + 2 &&
+      this.buildingsList.length > 0
+    ) {
+      if (this.spawnVendor('meat')) {
+        this.butcherMeatReserve = Math.max(0, this.butcherMeatReserve - 1);
+      }
+    }
     if (this.marketStalls.length < maxStalls && this.buildingsList.length > 0) {
       this.vendorSpawnAccumulator += simDt;
       if (this.vendorSpawnAccumulator >= (this.crises.povertyActive ? 5.5 : 10)) {
@@ -4642,6 +5487,7 @@ export class CitySimulation {
               fish: '#0284C7',
               clothes: '#E11D48',
               produce: '#16A34A',
+              meat: '#B91C1C',
               crafts: '#D97706',
               contraband: '#312E81',
               kayak: '#0891B2',
@@ -4651,7 +5497,7 @@ export class CitySimulation {
             const produceFactor = Math.max(0.25, 1 - (this.crises.pollutionLevel / 100) * 0.75);
             const initialStock = isIllicit
               ? 8
-              : goods === 'produce' || goods === 'fish'
+              : goods === 'produce' || goods === 'fish' || goods === 'meat'
               ? Math.max(1, Math.round(5 * produceFactor))
               : 5;
             const stallId = `stall_${this.stallIdCounter++}`;
@@ -4694,6 +5540,8 @@ export class CitySimulation {
                 ? '+Clothes Stall!'
                 : goods === 'produce'
                 ? '+Produce Stall!'
+                : goods === 'meat'
+                ? '+Meat Stall!'
                 : goods === 'kayak'
                 ? '+Kayak Rental!'
                 : '+Craft Stall!',
@@ -4799,7 +5647,7 @@ export class CitySimulation {
     scored.sort((a, b) => b.minDist - a.minDist);
     const farPool = scored.slice(0, Math.min(20, scored.length)).sort(() => Math.random() - 0.5);
     for (const item of farPool) {
-      const path = findPedestrianPath(this.tiles, startPt, { x: item.tile.x, y: item.tile.y });
+      const path = this.findPedestrianPath(this.tiles, startPt, { x: item.tile.x, y: item.tile.y });
       if (path) return { tile: item.tile, path };
     }
     return null;
@@ -4846,7 +5694,7 @@ export class CitySimulation {
       .filter((b) => b.category === 'residential' || b.category === 'workplace')
       .sort(() => Math.random() - 0.5);
     for (const home of houses.slice(0, 6)) {
-      const path = findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: stall.x, y: stall.y });
+      const path = this.findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: stall.x, y: stall.y });
       if (!path) continue;
       this.people.push({
         id: `ppl_${this.personIdCounter++}`,
@@ -4906,13 +5754,13 @@ export class CitySimulation {
 
     if (nearestRoad) {
       for (const st of sortedStations) {
-        const startRoad = findAdjacentRoadTile(this.tiles, st.x, st.y);
+        const startRoad = this.findAdjacentRoadTile(this.tiles, st.x, st.y);
         if (!startRoad) continue;
-        const path = findRoadPath(this.tiles, startRoad, nearestRoad, 0.8);
+        const path = this.findRoadPath(this.tiles, startRoad, nearestRoad, 0.8);
         if (!path || path.length < 2) continue;
-        const pedCheck = findPedestrianPath(
+        const pedCheck = this.findPedestrianPath(
           this.tiles,
-          findNearestWalkableTile(this.tiles, nearestRoad.x, nearestRoad.y, 1) || nearestRoad,
+          this.findNearestWalkableTile(this.tiles, nearestRoad.x, nearestRoad.y, 1) || nearestRoad,
           { x: stall.x, y: stall.y }
         );
         if (!pedCheck) continue;
@@ -4956,7 +5804,7 @@ export class CitySimulation {
 
     // Fallback: send raid officers directly on foot from nearest Police Station
     for (const st of sortedStations) {
-      const path = findPedestrianPath(this.tiles, { x: st.x, y: st.y }, { x: stall.x, y: stall.y });
+      const path = this.findPedestrianPath(this.tiles, { x: st.x, y: st.y }, { x: stall.x, y: stall.y });
       if (!path) continue;
       for (let k = 0; k < 2; k++) {
         this.people.push({
@@ -5003,8 +5851,8 @@ export class CitySimulation {
     if (existingOfficers === 0) {
       const tx = Math.floor(car.wx / TILE_SIZE);
       const ty = Math.floor(car.wy / TILE_SIZE);
-      const walkStart = findNearestWalkableTile(this.tiles, tx, ty, 1) || { x: tx, y: ty };
-      const path = findPedestrianPath(this.tiles, walkStart, { x: stall.x, y: stall.y });
+      const walkStart = this.findNearestWalkableTile(this.tiles, tx, ty, 1) || { x: tx, y: ty };
+      const path = this.findPedestrianPath(this.tiles, walkStart, { x: stall.x, y: stall.y });
       for (let k = 0; k < 2; k++) {
         this.people.push({
           id: `ppl_${this.personIdCounter++}`,
@@ -5058,35 +5906,52 @@ export class CitySimulation {
     }
   }
 
-  private spawnVendor() {
+  private spawnVendor(forcedGoods?: StallGoodsType): boolean {
     const origins = this.buildingsList.filter(
       (b) => b.category === 'residential' || b.category === 'commercial' || b.category === 'park'
     );
-    if (origins.length === 0) return;
+    if (origins.length === 0) return false;
 
+    const hasLivestock = this.animals.some((a) => a.kind === 'cow' || a.kind === 'pig');
     const shuffled = [...origins].sort(() => Math.random() - 0.5);
     for (const orig of shuffled.slice(0, 6)) {
       const spot = this.findOpenStallTile({ x: orig.x, y: orig.y });
       if (!spot) continue;
+      if (this.activeConstructions.some((c) => c.x === spot.tile.x && c.y === spot.tile.y)) {
+        continue;
+      }
       const goodsPool: StallGoodsType[] = ['clothes', 'produce', 'crafts', 'fish'];
+      if (this.butcherMeatReserve > 0 || hasLivestock) {
+        goodsPool.push('meat');
+      }
       const goods =
-        orig.blueprintId === 'tackle_shop'
+        forcedGoods ||
+        (orig.blueprintId === 'tackle_shop'
           ? 'fish'
           : orig.blueprintId === 'bakery' || orig.blueprintId === 'flower_shop'
           ? 'produce'
-          : goodsPool[Math.floor(Math.random() * goodsPool.length)];
+          : goodsPool[Math.floor(Math.random() * goodsPool.length)]);
       const shirts = ['#D97706', '#0284C7', '#E11D48', '#16A34A'];
       this.people.push({
         id: `ppl_${this.personIdCounter++}`,
         role: 'vendor',
         stallGoods: goods,
-        carryingItem: goods === 'fish' ? 'fish' : goods === 'clothes' ? 'clothes' : 'produce',
+        carryingItem:
+          goods === 'fish'
+            ? 'fish'
+            : goods === 'clothes'
+            ? 'clothes'
+            : goods === 'meat'
+            ? 'meat'
+            : 'produce',
         wx: (orig.x + 0.5) * TILE_SIZE,
         wy: (orig.y + 0.78) * TILE_SIZE,
         targetWx: (spot.tile.x + 0.5) * TILE_SIZE,
         targetWy: (spot.tile.y + 0.45) * TILE_SIZE,
         speed: 25,
-        shirtColor: shirts[Math.floor(Math.random() * shirts.length)],
+        shirtColor:
+          goods === 'meat' ? '#B91C1C' : shirts[Math.floor(Math.random() * shirts.length)],
+        hatColor: goods === 'meat' ? '#F8FAFC' : undefined,
         animPhase: Math.random() * Math.PI * 2,
         state: 'walking',
         homeBuildingId: orig.id,
@@ -5096,8 +5961,9 @@ export class CitySimulation {
         pedestrianPathIndex: spot.path.length > 1 ? 1 : 0,
         holdTimer: 0,
       });
-      return;
+      return true;
     }
+    return false;
   }
 
   private spawnBeggar() {
@@ -5123,7 +5989,7 @@ export class CitySimulation {
         for (const d of dirs) {
           const spot = this.getTile(hub.x + d.dx, hub.y + d.dy);
           if (!spot || spot.hasRoad || spot.terrain !== 'grass' || spot.building) continue;
-          const path = findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: spot.x, y: spot.y });
+          const path = this.findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: spot.x, y: spot.y });
           if (path) {
             const coats = ['#57534E', '#64748B', '#78350F', '#4D7C0F'];
             this.people.push({
@@ -5243,8 +6109,8 @@ export class CitySimulation {
     this.chaosCooldowns[type] = this.CHAOS_COOLDOWN_SECONDS;
 
     if (type === 'tornado') {
-      const rx = 3 + Math.floor(Math.random() * (GRID_COLS - 6));
-      const ry = 3 + Math.floor(Math.random() * (GRID_ROWS - 6));
+      const rx = 3 + Math.floor(Math.random() * (this.gridCols - 6));
+      const ry = 3 + Math.floor(Math.random() * (this.gridRows - 6));
       this.crises.tornadoActive = true;
       this.crises.tornadoRemaining = 26;
       this.crises.tornadoWx = (rx + 0.5) * TILE_SIZE;
@@ -5303,8 +6169,8 @@ export class CitySimulation {
         }
       }
       this.floatingLabels.push({
-        wx: (GRID_COLS * TILE_SIZE) * 0.5,
-        wy: (GRID_ROWS * TILE_SIZE) * 0.4,
+        wx: (this.gridCols * TILE_SIZE) * 0.5,
+        wy: (this.gridRows * TILE_SIZE) * 0.4,
         text: 'EARTHQUAKE!',
         color: '#FEF2F2',
         bgColor: '#92400E',
@@ -5351,8 +6217,8 @@ export class CitySimulation {
       }
       const centerFlood = this.tiles.find((t) => t.isFlooded);
       this.floatingLabels.push({
-        wx: ((centerFlood?.x ?? GRID_COLS / 2) + 0.5) * TILE_SIZE,
-        wy: ((centerFlood?.y ?? GRID_ROWS / 2) + 0.4) * TILE_SIZE,
+        wx: ((centerFlood?.x ?? this.gridCols / 2) + 0.5) * TILE_SIZE,
+        wy: ((centerFlood?.y ?? this.gridRows / 2) + 0.4) * TILE_SIZE,
         text: 'FLASH FLOOD!',
         color: '#E0F2FE',
         bgColor: '#0369A1',
@@ -5425,7 +6291,7 @@ export class CitySimulation {
       const origin = originPool[k % originPool.length];
       const shuffled = [...dirtyTargets].sort(() => Math.random() - 0.5);
       for (const spot of shuffled.slice(0, 8)) {
-        const path = findPedestrianPath(this.tiles, { x: origin.x, y: origin.y }, { x: spot.x, y: spot.y });
+        const path = this.findPedestrianPath(this.tiles, { x: origin.x, y: origin.y }, { x: spot.x, y: spot.y });
         if (!path) continue;
         this.people.push({
           id: `ppl_${this.personIdCounter++}`,
@@ -5465,7 +6331,7 @@ export class CitySimulation {
     for (let k = 0; k < count; k++) {
       const crater = this.blastCraters[k % this.blastCraters.length];
       const origin = preferred[k % preferred.length];
-      const path = findPedestrianPath(this.tiles, { x: origin.x, y: origin.y }, { x: crater.x, y: crater.y });
+      const path = this.findPedestrianPath(this.tiles, { x: origin.x, y: origin.y }, { x: crater.x, y: crater.y });
       if (!path) continue;
       this.people.push({
         id: `ppl_${this.personIdCounter++}`,
@@ -5494,15 +6360,23 @@ export class CitySimulation {
     if (targets.length === 0) return;
     const cityHalls = targets.filter((b) => b.category === 'city_hall');
 
-    // Invading foreign nation forces & armored tanks enter from the 4 corners and perimeter edges (crossing roads/bridges/rivers if needed)
+    // Invading foreign nation forces & armored tanks enter from the 4 corners and playable perimeter edges
     const cornerEntries: MapTile[] = [];
     const edgeEntries: MapTile[] = [];
+    const dirs4 = [
+      { dx: 1, dy: 0 },
+      { dx: -1, dy: 0 },
+      { dx: 0, dy: 1 },
+      { dx: 0, dy: -1 },
+    ];
     for (const t of this.tiles) {
+      if (t.terrain === 'void') continue;
+      const onOuter = t.x === 0 || t.y === 0 || t.x === this.gridCols - 1 || t.y === this.gridRows - 1;
+      const touchesVoid = dirs4.some((d) => this.getTile(t.x + d.dx, t.y + d.dy)?.terrain === 'void');
       const inCorner =
-        (t.x <= 2 || t.x >= GRID_COLS - 3) && (t.y <= 2 || t.y >= GRID_ROWS - 3);
-      const onEdge = t.x === 0 || t.y === 0 || t.x === GRID_COLS - 1 || t.y === GRID_ROWS - 1;
+        (t.x <= 4 || t.x >= this.gridCols - 5) && (t.y <= 4 || t.y >= this.gridRows - 5) && (onOuter || touchesVoid);
       if (inCorner) cornerEntries.push(t);
-      else if (onEdge) edgeEntries.push(t);
+      else if (onOuter || touchesVoid) edgeEntries.push(t);
     }
     const entryPool = cornerEntries.length > 0 || edgeEntries.length > 0 ? [...cornerEntries, ...edgeEntries] : [];
     if (entryPool.length === 0) return;
@@ -5519,7 +6393,7 @@ export class CitySimulation {
       const dest = aimAtHall
         ? cityHalls[0]
         : targets[Math.floor(Math.random() * targets.length)];
-      const path = findPedestrianPath(this.tiles, { x: entry.x, y: entry.y }, { x: dest.x, y: dest.y }, false, true);
+      const path = this.findPedestrianPath(this.tiles, { x: entry.x, y: entry.y }, { x: dest.x, y: dest.y }, false, true);
       if (!path) continue;
       const hasTank = k === 0 || Math.random() < 0.48;
       const wx = (entry.x + 0.5) * TILE_SIZE;
@@ -5592,8 +6466,8 @@ export class CitySimulation {
 
     if (tx === undefined || ty === undefined) {
       // Truly random coordinates across the map (avoid extreme corners)
-      tx = 1 + Math.floor(Math.random() * (GRID_COLS - 2));
-      ty = 1 + Math.floor(Math.random() * (GRID_ROWS - 2));
+      tx = 1 + Math.floor(Math.random() * (this.gridCols - 2));
+      ty = 1 + Math.floor(Math.random() * (this.gridRows - 2));
     }
 
     const wx = (tx + 0.5) * TILE_SIZE;
@@ -5836,37 +6710,42 @@ export class CitySimulation {
 
   private rollWeatherForSeason(): WeatherType {
     const r = Math.random();
+    let next: WeatherType;
     if (this.season === 'Winter') {
-      if (r < 0.22) return 'Sunny';
-      if (r < 0.36) return 'Cloudy';
-      if (r < 0.5) return 'Foggy';
-      if (r < 0.6) return 'Windy';
-      if (r < 0.9) return 'Snow';
-      return 'Storm';
+      if (r < 0.28) next = 'Sunny';
+      else if (r < 0.52) next = 'Cloudy';
+      else if (r < 0.66) next = 'Windy';
+      else if (r < 0.74) next = 'Foggy';
+      else if (r < 0.95) next = 'Snow';
+      else next = 'Storm';
+    } else if (this.season === 'Spring') {
+      if (r < 0.42) next = 'Sunny';
+      else if (r < 0.68) next = 'Cloudy';
+      else if (r < 0.82) next = 'Windy';
+      else if (r < 0.89) next = 'Foggy';
+      else if (r < 0.96) next = 'Rain';
+      else next = 'Storm';
+    } else if (this.season === 'Summer') {
+      if (r < 0.54) next = 'Sunny';
+      else if (r < 0.74) next = 'Cloudy';
+      else if (r < 0.85) next = 'Windy';
+      else if (r < 0.91) next = 'Foggy';
+      else if (r < 0.96) next = 'Rain';
+      else next = 'Storm';
+    } else {
+      // Autumn
+      if (r < 0.32) next = 'Sunny';
+      else if (r < 0.60) next = 'Cloudy';
+      else if (r < 0.78) next = 'Windy';
+      else if (r < 0.87) next = 'Foggy';
+      else if (r < 0.95) next = 'Rain';
+      else next = 'Storm';
     }
-    if (this.season === 'Spring') {
-      if (r < 0.3) return 'Sunny';
-      if (r < 0.48) return 'Cloudy';
-      if (r < 0.6) return 'Foggy';
-      if (r < 0.72) return 'Windy';
-      if (r < 0.9) return 'Rain';
-      return 'Storm';
+    // Never roll Foggy twice in a row so fog stays occasional rather than constant
+    if (next === 'Foggy' && this.weather === 'Foggy') {
+      return 'Cloudy';
     }
-    if (this.season === 'Summer') {
-      if (r < 0.42) return 'Sunny';
-      if (r < 0.58) return 'Cloudy';
-      if (r < 0.66) return 'Foggy';
-      if (r < 0.78) return 'Windy';
-      if (r < 0.91) return 'Rain';
-      return 'Storm';
-    }
-    // Autumn
-    if (r < 0.24) return 'Sunny';
-    if (r < 0.42) return 'Cloudy';
-    if (r < 0.58) return 'Foggy';
-    if (r < 0.74) return 'Windy';
-    if (r < 0.9) return 'Rain';
-    return 'Storm';
+    return next;
   }
 
   private updateWeather(simDt: number, realDt: number) {
@@ -5882,8 +6761,9 @@ export class CitySimulation {
       this.lightningFlash = 0.85;
     }
 
-    const mapW = GRID_COLS * TILE_SIZE;
-    const mapH = GRID_ROWS * TILE_SIZE;
+    const mapW = this.gridCols * TILE_SIZE;
+    const mapH = this.gridRows * TILE_SIZE;
+    // Windy weather sways trees, grass, and crops visibly without blowing flying particles across the screen
     const targetCount =
       this.weather === 'Storm'
         ? 145
@@ -5892,7 +6772,7 @@ export class CitySimulation {
         : this.weather === 'Snow'
         ? 95
         : this.weather === 'Windy'
-        ? 55
+        ? 0
         : this.season === 'Autumn'
         ? 28
         : this.season === 'Spring'
@@ -5925,16 +6805,6 @@ export class CitySimulation {
           vy: 26 + Math.random() * 24,
           size: 1.6 + Math.random() * 1.8,
           alpha: 0.55 + Math.random() * 0.35,
-        });
-      } else if (this.weather === 'Windy') {
-        this.weatherParticles.push({
-          x: Math.random() * mapW,
-          y: Math.random() * mapH,
-          vx: 145 + Math.random() * 95,
-          vy: 14 + Math.random() * 22,
-          size: 12 + Math.random() * 14,
-          alpha: 0.34 + Math.random() * 0.22,
-          color: this.season === 'Autumn' ? leafColors[Math.floor(Math.random() * leafColors.length)] : '#E2E8F0',
         });
       } else if (this.season === 'Autumn') {
         this.weatherParticles.push({
@@ -6176,7 +7046,7 @@ export class CitySimulation {
           ? { x: targets[Math.floor(Math.random() * targets.length)].x, y: targets[Math.floor(Math.random() * targets.length)].y }
           : null;
       if (!destPt) return;
-      const path = findPedestrianPath(this.tiles, { x: base.x, y: base.y }, destPt, false, this.crises.warActive);
+      const path = this.findPedestrianPath(this.tiles, { x: base.x, y: base.y }, destPt, false, this.crises.warActive);
       if (!path) continue;
       this.people.push({
         id: `ppl_${this.personIdCounter++}`,
@@ -6598,8 +7468,8 @@ export class CitySimulation {
               if (nearestHome) {
                 this.spawnDeathEvent(nearestHome, playAudio);
               } else {
-                const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(p.wx / TILE_SIZE)));
-                const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(p.wy / TILE_SIZE)));
+                const tx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(p.wx / TILE_SIZE)));
+                const ty = Math.max(0, Math.min(this.gridRows - 1, Math.floor(p.wy / TILE_SIZE)));
                 this.recordCoordinateDeath(tx, ty, p.wx, p.wy, this.describeArea(tx, ty), playAudio);
               }
               this.people.splice(i, 1);
@@ -6735,8 +7605,8 @@ export class CitySimulation {
           if (res !== 'moving') {
             const liveFoe = this.people.find((f) => f.role === 'invader');
             if (liveFoe) {
-              const fx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(liveFoe.wx / TILE_SIZE)));
-              const fy = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(liveFoe.wy / TILE_SIZE)));
+              const fx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(liveFoe.wx / TILE_SIZE)));
+              const fy = Math.max(0, Math.min(this.gridRows - 1, Math.floor(liveFoe.wy / TILE_SIZE)));
               if (!this.assignPedestrianRoute(p, fx, fy, liveFoe.wx, liveFoe.wy)) {
                 if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
               }
@@ -6844,8 +7714,8 @@ export class CitySimulation {
                 if (bldOrigin) {
                   this.spawnDeathEvent(bldOrigin, playAudio);
                 } else {
-                  const vtx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(victim.wx / TILE_SIZE)));
-                  const vty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(victim.wy / TILE_SIZE)));
+                  const vtx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(victim.wx / TILE_SIZE)));
+                  const vty = Math.max(0, Math.min(this.gridRows - 1, Math.floor(victim.wy / TILE_SIZE)));
                   this.recordCoordinateDeath(vtx, vty, victim.wx, victim.wy, this.describeArea(vtx, vty), playAudio);
                 }
                 this.people.splice(victimIdx, 1);
@@ -7136,7 +8006,7 @@ export class CitySimulation {
       .sort(() => Math.random() - 0.5);
     const shirtColors = ['#38BDF8', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6'];
     for (const orig of homes.slice(0, 6)) {
-      const path = findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: hall.x, y: hall.y });
+      const path = this.findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: hall.x, y: hall.y });
       if (!path) continue;
       this.people.push({
         id: `ppl_${this.personIdCounter++}`,
@@ -7466,7 +8336,7 @@ export class CitySimulation {
       .slice(0, 12)
       .map((b) => ({
         b,
-        path: findPedestrianPath(this.tiles, { x: b.x, y: b.y }, { x: hall!.x, y: hall!.y }),
+        path: this.findPedestrianPath(this.tiles, { x: b.x, y: b.y }, { x: hall!.x, y: hall!.y }),
       }))
       .filter((item): item is { b: PlacedBuilding; path: GridPoint[] } => Boolean(item.path));
 
@@ -7544,7 +8414,7 @@ export class CitySimulation {
     const stations = this.buildingsList.filter((b) => b.category === 'police');
     if (stations.length === 0) return false;
 
-    const destRoad = findAdjacentRoadTile(this.tiles, incident.x, incident.y);
+    const destRoad = this.findAdjacentRoadTile(this.tiles, incident.x, incident.y);
     if (!destRoad) return false;
 
     let bestStation: PlacedBuilding | null = null;
@@ -7557,9 +8427,9 @@ export class CitySimulation {
     );
 
     for (const st of sortedStations) {
-      const startRoad = findAdjacentRoadTile(this.tiles, st.x, st.y);
+      const startRoad = this.findAdjacentRoadTile(this.tiles, st.x, st.y);
       if (!startRoad) continue;
-      const path = findRoadPath(this.tiles, startRoad, destRoad, 0.8);
+      const path = this.findRoadPath(this.tiles, startRoad, destRoad, 0.8);
       if (path && path.length >= 2) {
         bestStation = st;
         bestPath = path;
@@ -7725,7 +8595,7 @@ export class CitySimulation {
       .filter((b) => b.id !== venue!.id && b.category !== 'road_path')
       .map((b) => ({
         b,
-        path: findPedestrianPath(this.tiles, { x: b.x, y: b.y }, { x: venue!.x, y: venue!.y }),
+        path: this.findPedestrianPath(this.tiles, { x: b.x, y: b.y }, { x: venue!.x, y: venue!.y }),
       }))
       .filter((item): item is { b: PlacedBuilding; path: GridPoint[] } => Boolean(item.path));
 
@@ -7992,7 +8862,7 @@ export class CitySimulation {
 
     const slice = openGrass.slice(0, Math.min(20, openGrass.length)).sort(() => Math.random() - 0.5);
     for (const pick of slice) {
-      const path = findPedestrianPath(this.tiles, startPt, { x: pick.x, y: pick.y });
+      const path = this.findPedestrianPath(this.tiles, startPt, { x: pick.x, y: pick.y });
       if (path) {
         planter.targetTileX = pick.x;
         planter.targetTileY = pick.y;
@@ -8328,7 +9198,7 @@ export class CitySimulation {
     let originBuilding: PlacedBuilding | null = null;
     let path: GridPoint[] | null = null;
     for (const h of hideouts.slice(0, 8)) {
-      const candidate = findPedestrianPath(this.tiles, { x: h.x, y: h.y }, { x: targetX, y: targetY });
+      const candidate = this.findPedestrianPath(this.tiles, { x: h.x, y: h.y }, { x: targetX, y: targetY });
       if (candidate) {
         originBuilding = h;
         path = candidate;
@@ -8411,7 +9281,7 @@ export class CitySimulation {
       if (dispatched >= 2) break;
       const startPt = this.getCurrentWalkableStart(ff.wx, ff.wy);
       if (!startPt) continue;
-      const path = findPedestrianPath(this.tiles, startPt, { x: fire.x, y: fire.y });
+      const path = this.findPedestrianPath(this.tiles, startPt, { x: fire.x, y: fire.y });
       if (!path) continue;
       ff.fireId = fire.id;
       ff.state = 'walking';
@@ -8430,7 +9300,7 @@ export class CitySimulation {
     const stations = this.buildingsList.filter((b) => b.category === 'fire_station');
     if (stations.length === 0) return false;
 
-    const destRoad = findAdjacentRoadTile(this.tiles, fire.x, fire.y);
+    const destRoad = this.findAdjacentRoadTile(this.tiles, fire.x, fire.y);
     if (!destRoad) return false;
 
     let bestStation: PlacedBuilding | null = null;
@@ -8441,9 +9311,9 @@ export class CitySimulation {
     );
 
     for (const st of sorted) {
-      const startRoad = findAdjacentRoadTile(this.tiles, st.x, st.y);
+      const startRoad = this.findAdjacentRoadTile(this.tiles, st.x, st.y);
       if (!startRoad) continue;
-      const path = findRoadPath(this.tiles, startRoad, destRoad, 0.8);
+      const path = this.findRoadPath(this.tiles, startRoad, destRoad, 0.8);
       if (path && path.length >= 2) {
         bestStation = st;
         bestPath = path;
@@ -8509,9 +9379,9 @@ export class CitySimulation {
       const isAdjacent = Math.abs(truckTx - fire.x) + Math.abs(truckTy - fire.y) <= 1;
       const walkPath = isAdjacent
         ? null
-        : findPedestrianPath(
+        : this.findPedestrianPath(
             this.tiles,
-            findNearestWalkableTile(this.tiles, truckTx, truckTy, 1) || { x: truckTx, y: truckTy },
+            this.findNearestWalkableTile(this.tiles, truckTx, truckTy, 1) || { x: truckTx, y: truckTy },
             { x: fire.x, y: fire.y }
           );
       if (isAdjacent || walkPath) {
@@ -8618,11 +9488,13 @@ export class CitySimulation {
       }
     }
 
+    const isFoggy = this.weather === 'Foggy';
     const activeCount = this.crashes.filter((c) => c.status === 'active').length;
-    if (activeCount >= 1 || this.cars.length < 4) return;
+    if (activeCount >= (isFoggy ? 2 : 1) || this.cars.length < 4) return;
 
     this.crashCheckAccumulator += simDt;
-    if (this.crashCheckAccumulator < 120) return;
+    const crashCheckInterval = isFoggy ? 42 : 120;
+    if (this.crashCheckAccumulator < crashCheckInterval) return;
 
     // 1. Occasional collision when a speeding responder overtakes close civilian traffic
     for (let i = 0; i < this.cars.length; i++) {
@@ -8653,23 +9525,24 @@ export class CitySimulation {
           continue;
         }
         const d = Math.hypot(em.wx - civ.wx, em.wy - civ.wy);
-        if (d > 10.5) continue;
+        if (d > (isFoggy ? 13 : 10.5)) continue;
         const tx = Math.floor(((em.wx + civ.wx) * 0.5) / TILE_SIZE);
         const ty = Math.floor(((em.wy + civ.wy) * 0.5) / TILE_SIZE);
         const tile = this.getTile(tx, ty);
         if (!tile || !tile.hasRoad) continue;
         if (this.crashes.some((c) => Math.abs(c.x - tx) <= 1 && Math.abs(c.y - ty) <= 1)) continue;
         this.crashCheckAccumulator = 0;
-        if (Math.random() < 0.14) {
+        if (Math.random() < (isFoggy ? 0.34 : 0.14)) {
           this.triggerCarCrash(i, j, playAudio, true);
         }
         return;
       }
     }
 
-    // 2. Look for two civilian cars in a tight near-collision (unsignaled intersection or high speed)
+    // 2. Look for two civilian cars in a tight near-collision (unsignaled intersection, high speed, or thick Foggy visibility)
     let bestPair: [number, number] | null = null;
     let bestDist = Infinity;
+    const maxCrashDist = isFoggy ? 16.5 : 13.5;
 
     for (let i = 0; i < this.cars.length; i++) {
       const a = this.cars[i];
@@ -8684,7 +9557,7 @@ export class CitySimulation {
       ) {
         continue;
       }
-      if (a.speed < 20) continue;
+      if (a.speed < (isFoggy ? 14 : 20)) continue;
 
       for (let j = i + 1; j < this.cars.length; j++) {
         const b = this.cars[j];
@@ -8699,10 +9572,10 @@ export class CitySimulation {
         ) {
           continue;
         }
-        if (b.speed < 16) continue;
+        if (b.speed < (isFoggy ? 12 : 16)) continue;
 
         const d = Math.hypot(a.wx - b.wx, a.wy - b.wy);
-        if (d > 13.5) continue;
+        if (d > maxCrashDist) continue;
 
         const midWx = (a.wx + b.wx) * 0.5;
         const midWy = (a.wy + b.wy) * 0.5;
@@ -8713,12 +9586,12 @@ export class CitySimulation {
         if (this.crashes.some((c) => Math.abs(c.x - tx) <= 1 && Math.abs(c.y - ty) <= 1)) continue;
 
         const headingDot = Math.cos(a.angle - b.angle);
-        const atIntersection = isIntersectionTile(this.tiles, tx, ty);
+        const atIntersection = this.isIntersectionTile(this.tiles, tx, ty);
         const unsignaled = atIntersection && tile.intersection.controlType !== 'signal';
         const isCrossing = headingDot < 0.45;
         const isFastClose = d < 12 && (a.speed > 34 || b.speed > 34);
 
-        if ((isCrossing || unsignaled || isFastClose) && d < bestDist) {
+        if ((isCrossing || unsignaled || isFastClose || isFoggy) && d < bestDist) {
           bestDist = d;
           bestPair = [i, j];
         }
@@ -8734,8 +9607,8 @@ export class CitySimulation {
       const ty = Math.floor(((carA.wy + carB.wy) * 0.5) / TILE_SIZE);
       const tile = this.getTile(tx, ty);
       const unsignaled =
-        tile && isIntersectionTile(this.tiles, tx, ty) && tile.intersection.controlType !== 'signal';
-      const chance = unsignaled ? 0.16 : 0.06;
+        tile && this.isIntersectionTile(this.tiles, tx, ty) && tile.intersection.controlType !== 'signal';
+      const chance = (unsignaled ? 0.16 : 0.06) * (isFoggy ? 2.8 : 1.0);
       if (Math.random() < chance) {
         this.triggerCarCrash(idxA, idxB, playAudio);
       }
@@ -8756,8 +9629,8 @@ export class CitySimulation {
 
     const wx = (carA.wx + carB.wx) * 0.5;
     const wy = (carA.wy + carB.wy) * 0.5;
-    const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(wx / TILE_SIZE)));
-    const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(wy / TILE_SIZE)));
+    const tx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(wx / TILE_SIZE)));
+    const ty = Math.max(0, Math.min(this.gridRows - 1, Math.floor(wy / TILE_SIZE)));
 
     // Reset mission dispatch flags & decrement active trip counters cleanly for the two crashed cars
     for (const crashedCar of [carA, carB]) {
@@ -8904,9 +9777,9 @@ export class CitySimulation {
     );
 
     for (const st of sorted) {
-      const startRoad = findAdjacentRoadTile(this.tiles, st.x, st.y);
+      const startRoad = this.findAdjacentRoadTile(this.tiles, st.x, st.y);
       if (!startRoad) continue;
-      const path = findRoadPath(this.tiles, startRoad, destRoad, 0.8);
+      const path = this.findRoadPath(this.tiles, startRoad, destRoad, 0.8);
       if (!path || path.length < 1) continue;
 
       const fullPath: GridPoint[] = [{ x: st.x, y: st.y }, ...path];
@@ -9004,7 +9877,7 @@ export class CitySimulation {
       if (b.id === car.destBuildingId) {
         b.activeTripsIn = Math.max(0, b.activeTripsIn - 1);
         if (!car.isReturningToStation) {
-          b.totalVisits += 1;
+          this.incrementBuildingOccupancy(b, 1);
         }
       }
     }
@@ -9256,7 +10129,7 @@ export class CitySimulation {
     if (!dest) return false;
 
     for (const orig of sortedBases.slice(0, 6)) {
-      const path = findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: dest.x, y: dest.y });
+      const path = this.findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: dest.x, y: dest.y });
       if (!path) continue;
       this.people.push({
         id: `ppl_${this.personIdCounter++}`,
@@ -9318,6 +10191,12 @@ export class CitySimulation {
       hasTodayPhotoNews: !this.canPublishTodayPhotoNews(),
       basementCount: this.buildingsList.filter((b) => b.hasBasement).length,
       animalsCount: this.animals.length,
+      gridCols: this.gridCols,
+      gridRows: this.gridRows,
+      expansionCredits: this.expansionCredits,
+      lastExpansionMilestone: this.lastExpansionMilestone,
+      pendingProposalsCount: this.pendingProposals.length,
+      activeConstructionsCount: this.activeConstructions.length,
       tornadoActive: this.crises.tornadoActive,
       earthquakeActive: this.crises.earthquakeActive,
       floodActive: this.crises.floodActive,
@@ -9399,11 +10278,11 @@ export class CitySimulation {
     if (bestNeighbourhood && bestDist <= 8) {
       return bestNeighbourhood.name;
     }
-    if (Math.abs(tx - GRID_COLS / 2) <= 6 && Math.abs(ty - GRID_ROWS / 2) <= 5) {
+    if (Math.abs(tx - this.gridCols / 2) <= 6 && Math.abs(ty - this.gridRows / 2) <= 5) {
       return 'Downtown';
     }
-    const ns = ty < GRID_ROWS * 0.36 ? 'North' : ty > GRID_ROWS * 0.64 ? 'South' : '';
-    const ew = tx < GRID_COLS * 0.36 ? 'West' : tx > GRID_COLS * 0.64 ? 'East' : '';
+    const ns = ty < this.gridRows * 0.36 ? 'North' : ty > this.gridRows * 0.64 ? 'South' : '';
+    const ew = tx < this.gridCols * 0.36 ? 'West' : tx > this.gridCols * 0.64 ? 'East' : '';
     if (ns && ew) return `${ns}-${ew} District`;
     if (ns) return `${ns}side`;
     if (ew) return `${ew}side`;
@@ -9429,6 +10308,56 @@ export class CitySimulation {
     return [...this.dailyHighlights];
   }
 
+  private generateReaderComments(headline: string, summary: string, weather: WeatherType): NewspaperComment[] {
+    const authors = [
+      'Gertie Pickle',
+      'Barnaby Honk',
+      'Captain Waffle',
+      'Nora Noodleman',
+      'Socks McGee',
+      'Uncle Crumb',
+      'Midge Sprocket',
+      'Zeke Ferret',
+      'Betsy Bongo',
+      'Prof. Turnip',
+    ];
+    const colors = ['#0EA5E9', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6', '#EF4444', '#14B8A6'];
+    const lower = `${headline} ${summary}`.toLowerCase();
+    const quips: string[] = [
+      `I read "${headline.slice(0, 32)}${headline.length > 32 ? '...' : ''}" twice while eating soup and dropped my spoon.`,
+      'My cat knocked over three flowerpots right as the paperboy hit my porch. 5 stars.',
+      'Not to be dramatic, but this is the greatest piece of journalism since Mayor ate cereal with a fork.',
+      'I framed page one next to my toaster. Even my sourdough starter looks impressed.',
+      'Finally! Someone had the guts to photograph our chaos instead of blaming pigeons.',
+      'Why was I NOT interviewed?! I was literally standing near a shrub doing backflips!',
+      '10/10 photo! Though my cousin swears that blur in the back is a sneaky raccoon.',
+      `Wild day! Also ${weather.toLowerCase()} weather made my umbrella turn inside out three times.`,
+      'Paperboy nailed a trick shot straight onto my doormat from a moving bicycle. Legend.',
+      'I showed this edition to a cow near the woods and it nodded respectfully.',
+    ];
+    if (lower.includes('fire') || lower.includes('crash') || lower.includes('war') || lower.includes('tornado')) {
+      quips.unshift('I was just trying to buy croissants and suddenly there is front-page mayhem?! Love this town.');
+    }
+    if (lower.includes('school') || lower.includes('park') || lower.includes('kid')) {
+      quips.unshift('My nephew says he is famous now and refuses to do math homework.');
+    }
+    const moods = ['Baffled', 'Amazed', 'Dramatic', 'Hyped', 'Suspicious', 'Delighted', 'Hungry'];
+    const pickedAuthors = [...authors].sort(() => Math.random() - 0.5).slice(0, 5);
+    const pickedQuips = [...quips].sort(() => Math.random() - 0.5).slice(0, 5);
+    return pickedAuthors.map((author, idx) => {
+      const mood = moods[(idx + Math.floor(Math.random() * moods.length)) % moods.length];
+      return {
+        id: `cmt_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+        author,
+        avatarColor: colors[idx % colors.length],
+        mood,
+        reaction: mood,
+        text: pickedQuips[idx],
+        likes: 2 + Math.floor(Math.random() * 44),
+      };
+    });
+  }
+
   public publishUserNewspaper(
     headline: string,
     summary: string,
@@ -9436,26 +10365,205 @@ export class CitySimulation {
   ): NewspaperEdition | null {
     if (!this.canPublishTodayPhotoNews()) return null;
     const stats = this.getStats();
+    const cleanHeadline = headline.trim() || `${this.getDayOfWeek()} Dispatch from ${this.mapName}`;
+    const cleanSummary = summary.trim() || 'Another lively day across town captured on camera.';
     const edition: NewspaperEdition = {
       id: `news_${this.newsIdCounter++}`,
       day: this.dayCount,
       dayOfWeek: this.getDayOfWeek(),
       season: this.season,
       weather: this.weather,
-      headline: headline.trim() || `${this.getDayOfWeek()} Dispatch from ${this.mapName}`,
-      summary: summary.trim() || 'Another lively day across town captured on camera.',
+      headline: cleanHeadline,
+      summary: cleanSummary,
       highlights: this.dailyHighlights.slice(0, 3),
       publishedAtTime: stats.formattedTime,
       photoDataUrl,
       isUserAuthored: true,
+      readerComments: this.generateReaderComments(cleanHeadline, cleanSummary, this.weather),
     };
     this.newspapers.unshift(edition);
     if (this.newspapers.length > 14) this.newspapers.pop();
     this.dailyHighlights = [];
     this.unreadNewsCount = 0;
     this.citizenHappiness = Math.min(100, this.citizenHappiness + 2);
+    this.spawnPaperboyDelivery();
     soundEngine.playMarketSale();
     return edition;
+  }
+
+  public spawnPaperboyDelivery() {
+    const houses = this.buildingsList.filter((b) => b.category === 'residential');
+    if (houses.length === 0) return;
+
+    const origins = this.buildingsList.filter(
+      (b) => b.category === 'city_hall' || b.category === 'commercial' || b.category === 'visit_spot'
+    );
+    const startBld = origins[0] || houses[0];
+
+    // Order reachable houses using greedy nearest-neighbor so the paperboy rides smoothly across neighbourhoods
+    const remaining = [...houses];
+    const routeHouses: PlacedBuilding[] = [];
+    let curX = startBld.x;
+    let curY = startBld.y;
+    while (remaining.length > 0 && routeHouses.length < 10) {
+      remaining.sort(
+        (a, b) => Math.hypot(a.x - curX, a.y - curY) - Math.hypot(b.x - curX, b.y - curY)
+      );
+      const next = remaining.shift()!;
+      routeHouses.push(next);
+      curX = next.x;
+      curY = next.y;
+    }
+    const first = routeHouses.shift();
+    if (!first) return;
+
+    const path = this.findPedestrianPath(this.tiles, { x: startBld.x, y: startBld.y }, { x: first.x, y: first.y });
+    if (!path) return;
+
+    this.people.push({
+      id: `ppl_${this.personIdCounter++}`,
+      role: 'paperboy',
+      hasBicycle: true,
+      wx: (startBld.x + 0.5) * TILE_SIZE,
+      wy: (startBld.y + 0.8) * TILE_SIZE,
+      targetWx: (first.x + 0.5) * TILE_SIZE,
+      targetWy: (first.y + 0.82) * TILE_SIZE,
+      speed: 58,
+      shirtColor: '#EA580C',
+      hatColor: '#1E293B',
+      carryingItem: 'books',
+      animPhase: 0,
+      state: 'delivering_paper',
+      homeBuildingId: startBld.id,
+      destBuildingId: first.id,
+      targetTileX: first.x,
+      targetTileY: first.y,
+      pedestrianPath: path,
+      pedestrianPathIndex: path.length > 1 ? 1 : 0,
+      deliveryQueueIds: routeHouses.map((h) => h.id),
+      holdTimer: 0,
+    });
+  }
+
+  private updateNewspaperDelivery(simDt: number, realDt: number, playAudio: boolean) {
+    // 1. Decay old porch papers if nobody picks them up
+    for (let i = this.porchPapers.length - 1; i >= 0; i--) {
+      this.porchPapers[i].age += simDt;
+      if (this.porchPapers[i].age >= 95) {
+        this.porchPapers.splice(i, 1);
+      }
+    }
+
+    // 2. Step bicycling paperboys & doorstep pickups
+    for (let i = this.people.length - 1; i >= 0; i--) {
+      const p = this.people[i];
+      if (p.role === 'paperboy') {
+        if (p.state === 'returning') {
+          p.holdTimer -= realDt;
+          const res = this.stepPersonAlongPath(p, realDt, 11);
+          if (res !== 'moving' || p.holdTimer <= 0) {
+            this.people.splice(i, 1);
+          }
+          continue;
+        }
+        const res = this.stepPersonAlongPath(p, realDt, 12);
+        if (res === 'arrived') {
+          const house = this.buildingsList.find((b) => b.id === p.destBuildingId);
+          if (house) {
+            const px = (house.x + 0.34 + Math.random() * 0.32) * TILE_SIZE;
+            const py = (house.y + 0.86) * TILE_SIZE;
+            this.porchPapers.push({
+              id: `pp_${this.porchPaperIdCounter++}`,
+              buildingId: house.id,
+              x: house.x,
+              y: house.y,
+              wx: px,
+              wy: py,
+              age: 0,
+              pickedUp: false,
+            });
+            if (Math.random() < 0.45) {
+              this.floatingLabels.push({
+                wx: (house.x + 0.5) * TILE_SIZE,
+                wy: (house.y + 0.25) * TILE_SIZE,
+                text: '📰 Fresh Paper!',
+                color: '#0F172A',
+                bgColor: '#FEF08A',
+                age: 0,
+                maxAge: 1.5,
+              });
+            }
+            if (playAudio && Math.random() < 0.35) soundEngine.playUiTick();
+            // Resident steps out onto porch to grab today's newspaper!
+            this.people.push({
+              id: `ppl_${this.personIdCounter++}`,
+              role: 'pedestrian',
+              speechTopic: 'pickup_paper',
+              wx: (house.x + 0.5) * TILE_SIZE,
+              wy: (house.y + 0.72) * TILE_SIZE,
+              targetWx: px,
+              targetWy: py,
+              speed: 19,
+              shirtColor: ['#38BDF8', '#10B981', '#F59E0B', '#EC4899'][Math.floor(Math.random() * 4)],
+              animPhase: 0,
+              state: 'idling',
+              homeBuildingId: house.id,
+              holdTimer: 1.8,
+            });
+          }
+
+          // Advance to next house on route or pedal home
+          let routedNext = false;
+          while (p.deliveryQueueIds && p.deliveryQueueIds.length > 0) {
+            const nextId = p.deliveryQueueIds.shift()!;
+            const nextHouse = this.buildingsList.find((b) => b.id === nextId);
+            if (!nextHouse) continue;
+            if (this.assignPedestrianRoute(p, nextHouse.x, nextHouse.y, (nextHouse.x + 0.5) * TILE_SIZE, (nextHouse.y + 0.82) * TILE_SIZE)) {
+              p.destBuildingId = nextHouse.id;
+              routedNext = true;
+              break;
+            }
+          }
+          if (!routedNext) {
+            if (!this.assignReturnRoute(p)) {
+              this.people.splice(i, 1);
+            }
+          }
+        } else if (res === 'blocked') {
+          if (!this.assignReturnRoute(p)) {
+            this.people.splice(i, 1);
+          }
+        }
+        continue;
+      }
+
+      if (p.role === 'pedestrian' && p.speechTopic === 'pickup_paper') {
+        const dx = p.targetWx - p.wx;
+        const dy = p.targetWy - p.wy;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 1.8) {
+          const step = Math.min(dist, p.speed * realDt);
+          p.wx += (dx / dist) * step;
+          p.wy += (dy / dist) * step;
+          p.animPhase += realDt * 7;
+        } else if (p.holdTimer > 0) {
+          p.holdTimer -= realDt;
+          // Grab the paper from the porch!
+          const paperIdx = this.porchPapers.findIndex((pp) => pp.buildingId === p.homeBuildingId);
+          if (paperIdx !== -1 && p.holdTimer < 1.1) {
+            this.porchPapers.splice(paperIdx, 1);
+            p.carryingItem = 'books';
+            const home = this.buildingsList.find((b) => b.id === p.homeBuildingId);
+            if (home) {
+              p.targetWx = (home.x + 0.5) * TILE_SIZE;
+              p.targetWy = (home.y + 0.72) * TILE_SIZE;
+            }
+          }
+        } else {
+          this.people.splice(i, 1);
+        }
+      }
+    }
   }
 
   private updateDisasters(simDt: number, realDt: number, playAudio: boolean) {
@@ -9464,10 +10572,10 @@ export class CitySimulation {
       this.crises.tornadoRemaining = Math.max(0, this.crises.tornadoRemaining - simDt);
       this.crises.tornadoWx += this.tornadoVx * realDt;
       this.crises.tornadoWy += this.tornadoVy * realDt;
-      if (this.crises.tornadoWx < TILE_SIZE * 2 || this.crises.tornadoWx > (GRID_COLS - 2) * TILE_SIZE) {
+      if (this.crises.tornadoWx < TILE_SIZE * 2 || this.crises.tornadoWx > (this.gridCols - 2) * TILE_SIZE) {
         this.tornadoVx *= -1;
       }
-      if (this.crises.tornadoWy < TILE_SIZE * 2 || this.crises.tornadoWy > (GRID_ROWS - 2) * TILE_SIZE) {
+      if (this.crises.tornadoWy < TILE_SIZE * 2 || this.crises.tornadoWy > (this.gridRows - 2) * TILE_SIZE) {
         this.tornadoVy *= -1;
       }
       if (Math.random() < realDt * 12 && this.smokeParticles.length < 180) {
@@ -9482,8 +10590,8 @@ export class CitySimulation {
           color: 'rgba(148, 163, 184, 0.75)',
         });
       }
-      const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(this.crises.tornadoWx / TILE_SIZE)));
-      const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(this.crises.tornadoWy / TILE_SIZE)));
+      const tx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(this.crises.tornadoWx / TILE_SIZE)));
+      const ty = Math.max(0, Math.min(this.gridRows - 1, Math.floor(this.crises.tornadoWy / TILE_SIZE)));
       const tile = this.getTile(tx, ty);
       if (tile) {
         if (tile.terrain === 'forest' && Math.random() < simDt * 1.4) {
@@ -9569,6 +10677,10 @@ export class CitySimulation {
         else if (hour >= 8.0 && hour < 17.5) b.statusText = 'Active Shift';
         else if (hour >= 6.5 && hour < 8.0) b.statusText = 'Opening Soon';
         else b.statusText = 'Closed (Night)';
+      } else if (b.category === 'commercial') {
+        if (isWarPanic) b.statusText = 'Closed (Emergency)';
+        else if (this.isStoreOpen()) b.statusText = 'Open (6AM–10PM)';
+        else b.statusText = 'Closed (10PM–6AM)';
       } else if (b.category === 'city_hall') {
         if (this.electionActive) b.statusText = 'Mayoral Election Open';
         else if (!this.mayorAlive) b.statusText = 'Mayor Seat Vacant';
@@ -9613,7 +10725,7 @@ export class CitySimulation {
         this.schoolCommuteAccumulator = 0;
         const home = houses[Math.floor(Math.random() * houses.length)];
         const sch = schools[Math.floor(Math.random() * schools.length)];
-        const path = findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: sch.x, y: sch.y });
+        const path = this.findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: sch.x, y: sch.y });
         if (path && path.length >= 2) {
           home.totalVisits = Math.max(0, home.totalVisits - 1);
           const modeTag = isDropoffWindow ? 'dropoff' : 'pickup';
@@ -9696,7 +10808,7 @@ export class CitySimulation {
               // Student leaves school with parent back home!
               const home = this.buildingsList.find((b) => b.id === p.homeBuildingId);
               if (home) {
-                const backPath = findPedestrianPath(this.tiles, { x: sch.x, y: sch.y }, { x: home.x, y: home.y });
+                const backPath = this.findPedestrianPath(this.tiles, { x: sch.x, y: sch.y }, { x: home.x, y: home.y });
                 if (backPath) {
                   this.people.push({
                     id: `ppl_${this.personIdCounter++}`,
@@ -9757,7 +10869,7 @@ export class CitySimulation {
           const res = this.stepPersonAlongPath(p, realDt, 8.5);
           if (res === 'arrived') {
             const sch = this.buildingsList.find((b) => b.id === p.destBuildingId);
-            if (sch) sch.totalVisits += 1;
+            if (sch) this.incrementBuildingOccupancy(sch, 1);
             this.people.splice(i, 1);
           } else if (res === 'blocked') {
             this.people.splice(i, 1);
@@ -9767,7 +10879,57 @@ export class CitySimulation {
           const res = this.stepPersonAlongPath(p, realDt, 8.5);
           if (res === 'arrived') {
             const home = this.buildingsList.find((b) => b.id === p.homeBuildingId);
-            if (home) home.totalVisits += 1;
+            if (home) this.incrementBuildingOccupancy(home, 1);
+            this.people.splice(i, 1);
+          } else if (res === 'blocked' || p.holdTimer <= 0) {
+            this.people.splice(i, 1);
+          }
+        }
+      } else if (p.role === 'student' && p.speechTopic === 'playground') {
+        if ((isWarPanic || this.isOutdoorCurfew()) && p.state !== 'returning') {
+          if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+          continue;
+        }
+        if (p.state === 'walking') {
+          const res = this.stepPersonAlongPath(p, realDt, 8.5);
+          if (res === 'arrived') {
+            p.state = 'playing_park';
+            p.holdTimer = 14 + Math.random() * 10;
+          } else if (res === 'blocked') {
+            this.people.splice(i, 1);
+          }
+        } else if (p.state === 'playing_park') {
+          p.animPhase += realDt * 9;
+          p.holdTimer -= realDt;
+          if (p.targetTileX !== undefined && p.targetTileY !== undefined) {
+            const cx = (p.targetTileX + 0.5) * TILE_SIZE;
+            const cy = (p.targetTileY + 0.56) * TILE_SIZE;
+            const slot = (p.id.charCodeAt(p.id.length - 1) || 0) % 3;
+            if (slot === 0) {
+              // Swinging back & forth on the swing set
+              p.wx = cx - 9 + Math.sin(p.animPhase * 0.45) * 4;
+              p.wy = cy - 4 + Math.cos(p.animPhase * 0.9) * 2.5;
+            } else if (slot === 1) {
+              // Spinning on merry-go-round carousel
+              p.wx = cx + 9 + Math.cos(p.animPhase * 0.7) * 5;
+              p.wy = cy + 2 + Math.sin(p.animPhase * 0.7) * 3.5;
+            } else {
+              // Sliding & running around climbing zone
+              p.wx = cx + Math.sin(p.animPhase * 0.55) * 7;
+              p.wy = cy - 2 + Math.abs(Math.sin(p.animPhase * 0.8)) * 5;
+            }
+          }
+          if (p.holdTimer <= 0) {
+            const park = this.buildingsList.find((b) => b.id === p.destBuildingId);
+            if (park) park.totalVisits = Math.max(0, park.totalVisits - 1);
+            if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+          }
+        } else {
+          p.holdTimer -= realDt;
+          const res = this.stepPersonAlongPath(p, realDt, 8);
+          if (res === 'arrived') {
+            const home = this.buildingsList.find((b) => b.id === p.homeBuildingId);
+            if (home) this.incrementBuildingOccupancy(home, 1);
             this.people.splice(i, 1);
           } else if (res === 'blocked' || p.holdTimer <= 0) {
             this.people.splice(i, 1);
@@ -9775,22 +10937,108 @@ export class CitySimulation {
         }
       }
     }
+
+    // Spawn visible kids playing inside Playground parks (outside school class hours or on weekends)
+    const playgrounds = this.buildingsList.filter(
+      (b) => b.category === 'park' && b.parkVariant === 'playground'
+    );
+    const activePlayKids = this.people.filter(
+      (p) => p.role === 'student' && p.speechTopic === 'playground'
+    ).length;
+    if (
+      !this.isOutdoorCurfew() &&
+      !isWarPanic &&
+      playgrounds.length > 0 &&
+      houses.length > 0 &&
+      (isWeekend || hour < 8.0 || hour >= 15.7) &&
+      activePlayKids < Math.min(6, playgrounds.length * 2)
+    ) {
+      this.playgroundCheckAccumulator += simDt;
+      if (this.playgroundCheckAccumulator >= 4.5) {
+        this.playgroundCheckAccumulator = 0;
+        const pg = playgrounds[Math.floor(Math.random() * playgrounds.length)];
+        const home = houses[Math.floor(Math.random() * houses.length)];
+        const path = this.findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: pg.x, y: pg.y });
+        if (path && path.length >= 1) {
+          this.incrementBuildingOccupancy(pg, 1);
+          this.people.push({
+            id: `ppl_${this.personIdCounter++}`,
+            role: 'student',
+            speechTopic: 'playground',
+            wx: (home.x + 0.5) * TILE_SIZE,
+            wy: (home.y + 0.78) * TILE_SIZE,
+            targetWx: (pg.x + 0.5) * TILE_SIZE,
+            targetWy: (pg.y + 0.56) * TILE_SIZE,
+            speed: 33,
+            shirtColor: ['#F43F5E', '#0EA5E9', '#10B981', '#F59E0B', '#A855F7'][Math.floor(Math.random() * 5)],
+            hatColor: Math.random() < 0.5 ? '#FDE047' : '#38BDF8',
+            animPhase: Math.random() * Math.PI * 2,
+            state: 'walking',
+            homeBuildingId: home.id,
+            destBuildingId: pg.id,
+            targetTileX: pg.x,
+            targetTileY: pg.y,
+            pedestrianPath: path,
+            pedestrianPathIndex: path.length > 1 ? 1 : 0,
+            holdTimer: 16,
+          });
+        }
+      }
+    }
+  }
+
+  private pickWeightedAnimalTile(): MapTile | null {
+    const candidates = this.tiles.filter(
+      (t) =>
+        (t.terrain === 'grass' || t.terrain === 'sand') &&
+        !t.hasRoad &&
+        (!t.building || t.building.category === 'park' || t.building.category === 'crops')
+    );
+    if (candidates.length === 0) return null;
+
+    let totalWeight = 0;
+    const weights = candidates.map((t) => {
+      let forestNeighbors = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          if (this.getTile(t.x + dx, t.y + dy)?.terrain === 'forest') {
+            forestNeighbors++;
+          }
+        }
+      }
+      const w =
+        forestNeighbors >= 3
+          ? 12
+          : forestNeighbors >= 1
+          ? 4
+          : t.building?.category === 'crops' || t.building?.category === 'park'
+          ? 3
+          : 1;
+      totalWeight += w;
+      return w;
+    });
+
+    let roll = Math.random() * totalWeight;
+    for (let i = 0; i < candidates.length; i++) {
+      roll -= weights[i];
+      if (roll <= 0) return candidates[i];
+    }
+    return candidates[candidates.length - 1];
   }
 
   private seedInitialAnimals() {
-    const grassOrPark = this.tiles.filter(
-      (t) => t.terrain === 'grass' && !t.hasRoad && (!t.building || t.building.category === 'park' || t.building.category === 'crops')
-    );
-    if (grassOrPark.length === 0) return;
-
     const kinds: AnimalKind[] = ['bird', 'bird', 'bird', 'cow', 'cow', 'pig', 'pig', 'chicken', 'chicken'];
     const crops = this.buildingsList.filter((b) => b.category === 'crops');
     for (const kind of kinds) {
-      const nearCrop = crops.length > 0 && kind !== 'bird' && Math.random() < 0.7;
+      const nearCrop = crops.length > 0 && kind !== 'bird' && Math.random() < 0.45;
       const spot = nearCrop
-        ? this.getTile(crops[Math.floor(Math.random() * crops.length)].x, crops[Math.floor(Math.random() * crops.length)].y) ||
-          grassOrPark[Math.floor(Math.random() * grassOrPark.length)]
-        : grassOrPark[Math.floor(Math.random() * grassOrPark.length)];
+        ? this.getTile(
+            crops[Math.floor(Math.random() * crops.length)].x,
+            crops[Math.floor(Math.random() * crops.length)].y
+          ) || this.pickWeightedAnimalTile()
+        : this.pickWeightedAnimalTile();
+      if (!spot) continue;
       const wx = (spot.x + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 14;
       const wy = (spot.y + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 14;
       this.animals.push({
@@ -9824,15 +11072,12 @@ export class CitySimulation {
       }
     }
 
-    // 2. Replenish animals up to 12 naturally
+    // 2. Replenish animals up to 14 naturally (heavily clustered near tree clumps & crops)
     this.animalSpawnAccumulator += simDt;
-    if (this.animalSpawnAccumulator >= 8 && this.animals.length < 12) {
+    if (this.animalSpawnAccumulator >= 7 && this.animals.length < 14) {
       this.animalSpawnAccumulator = 0;
-      const spots = this.tiles.filter(
-        (t) => t.terrain === 'grass' && !t.hasRoad && (!t.building || t.building.category === 'park' || t.building.category === 'crops')
-      );
-      if (spots.length > 0) {
-        const spot = spots[Math.floor(Math.random() * spots.length)];
+      const spot = this.pickWeightedAnimalTile();
+      if (spot) {
         const birdsCount = this.animals.filter((a) => a.kind === 'bird').length;
         const kind: AnimalKind =
           birdsCount < 4
@@ -9864,8 +11109,8 @@ export class CitySimulation {
         if (ani.holdTimer <= 0) {
           ani.state = ani.kind === 'bird' && Math.random() < 0.65 ? 'flying' : 'roaming';
           const range = ani.kind === 'bird' ? 110 : 54;
-          ani.targetWx = Math.max(24, Math.min(GRID_COLS * TILE_SIZE - 24, ani.wx + (Math.random() - 0.5) * range));
-          ani.targetWy = Math.max(24, Math.min(GRID_ROWS * TILE_SIZE - 24, ani.wy + (Math.random() - 0.5) * range));
+          ani.targetWx = Math.max(24, Math.min(this.gridCols * TILE_SIZE - 24, ani.wx + (Math.random() - 0.5) * range));
+          ani.targetWy = Math.max(24, Math.min(this.gridRows * TILE_SIZE - 24, ani.wy + (Math.random() - 0.5) * range));
           ani.holdTimer = 3 + Math.random() * 3;
         }
       } else {
@@ -9899,7 +11144,7 @@ export class CitySimulation {
         const targetCrop = ripeCrops[Math.floor(Math.random() * ripeCrops.length)];
         const homes = this.buildingsList.filter((b) => b.category === 'residential' || b.category === 'crops');
         const orig = homes.length > 0 ? homes[Math.floor(Math.random() * homes.length)] : targetCrop;
-        const path = findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: targetCrop.x, y: targetCrop.y });
+        const path = this.findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: targetCrop.x, y: targetCrop.y });
         if (path) {
           this.people.push({
             id: `ppl_${this.personIdCounter++}`,
@@ -9930,9 +11175,9 @@ export class CitySimulation {
       if (livestock.length > 2 && shops.length > 0 && activeButchers < 1) {
         const prey = livestock[Math.floor(Math.random() * livestock.length)];
         const orig = shops[Math.floor(Math.random() * shops.length)];
-        const ptx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(prey.wx / TILE_SIZE)));
-        const pty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(prey.wy / TILE_SIZE)));
-        const path = findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: ptx, y: pty });
+        const ptx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(prey.wx / TILE_SIZE)));
+        const pty = Math.max(0, Math.min(this.gridRows - 1, Math.floor(prey.wy / TILE_SIZE)));
+        const path = this.findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: ptx, y: pty });
         if (path) {
           this.people.push({
             id: `ppl_${this.personIdCounter++}`,
@@ -10015,7 +11260,8 @@ export class CitySimulation {
             const aIdx = this.animals.findIndex((a) => a.id === p.targetAnimalId);
             if (aIdx !== -1) {
               this.animals.splice(aIdx, 1);
-              p.carryingItem = 'produce';
+              p.carryingItem = 'meat';
+              this.butcherMeatReserve = Math.min(12, this.butcherMeatReserve + 2);
               this.economyScore = Math.min(100, this.economyScore + 0.7);
               this.floatingLabels.push({
                 wx: p.wx,
@@ -10062,8 +11308,8 @@ export class CitySimulation {
     if (candidates.length === 0 || Math.random() > 0.62) return;
 
     const litterer = candidates[Math.floor(Math.random() * candidates.length)];
-    const tx = Math.max(0, Math.min(GRID_COLS - 1, Math.floor(litterer.wx / TILE_SIZE)));
-    const ty = Math.max(0, Math.min(GRID_ROWS - 1, Math.floor(litterer.wy / TILE_SIZE)));
+    const tx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(litterer.wx / TILE_SIZE)));
+    const ty = Math.max(0, Math.min(this.gridRows - 1, Math.floor(litterer.wy / TILE_SIZE)));
 
     const dirs = [
       { dx: 1, dy: 0 },
@@ -10131,89 +11377,272 @@ export class CitySimulation {
     void playAudio;
   }
 
+  private getWaterBodyInfo(startX: number, startY: number): {
+    tileCount: number;
+    spanX: number;
+    spanY: number;
+    tiles: GridPoint[];
+    isLargeForBoats: boolean;
+  } {
+    const startTile = this.getTile(startX, startY);
+    if (!startTile || startTile.terrain !== 'water') {
+      return { tileCount: 0, spanX: 0, spanY: 0, tiles: [], isLargeForBoats: false };
+    }
+    const visited = new Set<string>([`${startX},${startY}`]);
+    const queue: GridPoint[] = [{ x: startX, y: startY }];
+    const tiles: GridPoint[] = [];
+    let minX = startX;
+    let maxX = startX;
+    let minY = startY;
+    let maxY = startY;
+    const dirs = [
+      { dx: 1, dy: 0 },
+      { dx: -1, dy: 0 },
+      { dx: 0, dy: 1 },
+      { dx: 0, dy: -1 },
+    ];
+
+    let head = 0;
+    while (head < queue.length && tiles.length < 360) {
+      const cur = queue[head++];
+      tiles.push(cur);
+      if (cur.x < minX) minX = cur.x;
+      if (cur.x > maxX) maxX = cur.x;
+      if (cur.y < minY) minY = cur.y;
+      if (cur.y > maxY) maxY = cur.y;
+
+      for (const d of dirs) {
+        const nx = cur.x + d.dx;
+        const ny = cur.y + d.dy;
+        const key = `${nx},${ny}`;
+        if (visited.has(key)) continue;
+        const nt = this.getTile(nx, ny);
+        if (nt && nt.terrain === 'water' && !nt.hasRoad && !nt.hasFootbridge) {
+          visited.add(key);
+          queue.push({ x: nx, y: ny });
+        }
+      }
+    }
+
+    const spanX = maxX - minX + 1;
+    const spanY = maxY - minY + 1;
+    const isLargeForBoats = tiles.length >= 16 && Math.max(spanX, spanY) >= 6;
+    return {
+      tileCount: tiles.length,
+      spanX,
+      spanY,
+      tiles,
+      isLargeForBoats,
+    };
+  }
+
+  private buildWaterCruisePath(
+    startWaterX: number,
+    startWaterY: number,
+    waterTiles: GridPoint[]
+  ): GridPoint[] {
+    if (waterTiles.length <= 1) return [{ x: startWaterX, y: startWaterY }];
+    const waterSet = new Set(waterTiles.map((t) => `${t.x},${t.y}`));
+    const parent = new Map<string, string | null>();
+    const dist = new Map<string, number>();
+    const startKey = `${startWaterX},${startWaterY}`;
+    const queue: GridPoint[] = [{ x: startWaterX, y: startWaterY }];
+    parent.set(startKey, null);
+    dist.set(startKey, 0);
+    const dirs = [
+      { dx: 1, dy: 0 },
+      { dx: -1, dy: 0 },
+      { dx: 0, dy: 1 },
+      { dx: 0, dy: -1 },
+    ];
+
+    let head = 0;
+    const candidates: { pt: GridPoint; d: number }[] = [];
+    while (head < queue.length) {
+      const cur = queue[head++];
+      const curKey = `${cur.x},${cur.y}`;
+      const curD = dist.get(curKey) ?? 0;
+      if (curD >= 3 && curD <= 9) {
+        candidates.push({ pt: cur, d: curD });
+      }
+      if (curD >= 9) continue;
+      for (const d of dirs) {
+        const nx = cur.x + d.dx;
+        const ny = cur.y + d.dy;
+        const nKey = `${nx},${ny}`;
+        if (!waterSet.has(nKey) || dist.has(nKey)) continue;
+        dist.set(nKey, curD + 1);
+        parent.set(nKey, curKey);
+        queue.push({ x: nx, y: ny });
+      }
+    }
+
+    if (candidates.length === 0) return [{ x: startWaterX, y: startWaterY }];
+    const farPick = candidates[Math.floor(Math.random() * candidates.length)].pt;
+    const outbound: GridPoint[] = [];
+    let traceKey: string | null = `${farPick.x},${farPick.y}`;
+    while (traceKey) {
+      const [kx, ky] = traceKey.split(',').map(Number);
+      outbound.push({ x: kx, y: ky });
+      traceKey = parent.get(traceKey) ?? null;
+    }
+    outbound.reverse();
+    const inbound = outbound.slice(0, -1).reverse();
+    return [...outbound, ...inbound];
+  }
+
   private updateCommunityActivities(simDt: number, realDt: number, playAudio: boolean) {
     const curfew = this.isOutdoorCurfew();
     const isWarPanic = this.crises.warActive || this.people.some((o) => o.role === 'invader');
     const hour = this.minutesOfDay / 60;
     const isSchoolHours = hour >= 8 && hour < 16;
 
-    // 1. Step & Spawn Coastal Businesses & Water Sports (Kayaking, Rowing Boats, Swimming) when water is unfrozen
+    // Remove boat/canoe racks if the adjacent water body shrunk below long & large requirements
+    for (let sIdx = this.marketStalls.length - 1; sIdx >= 0; sIdx--) {
+      const st = this.marketStalls[sIdx];
+      if (st.goods !== 'kayak' && st.goods !== 'rowboat') continue;
+      const dirs = [
+        { dx: 1, dy: 0 },
+        { dx: -1, dy: 0 },
+        { dx: 0, dy: 1 },
+        { dx: 0, dy: -1 },
+      ];
+      let hasLargeAdjacentWater = false;
+      for (const d of dirs) {
+        const nt = this.getTile(st.x + d.dx, st.y + d.dy);
+        if (nt && nt.terrain === 'water' && !nt.hasFootbridge) {
+          if (this.getWaterBodyInfo(nt.x, nt.y).isLargeForBoats) {
+            hasLargeAdjacentWater = true;
+            break;
+          }
+        }
+      }
+      if (!hasLargeAdjacentWater) {
+        this.marketStalls.splice(sIdx, 1);
+      }
+    }
+
+    // 1. Step & Spawn Coastal Water Activities:
+    //    - Swimming can occur on any walkable shore tile.
+    //    - Boats & Canoes ONLY appear on long & large water bodies, and humans visibly build them on shore first!
     const activeWaterUsers = this.people.filter((p) => p.role === 'kayaker').length;
     if (!curfew && !isWarPanic && this.season !== 'Winter' && activeWaterUsers < 5) {
       this.kayakerAccumulator += simDt;
-      if (this.kayakerAccumulator >= 10) {
+      if (this.kayakerAccumulator >= 9) {
         this.kayakerAccumulator = 0;
         const shore = this.getWalkableShoreTiles();
         const origins = this.buildingsList.filter(
-          (b) => b.category === 'park' || b.category === 'residential' || b.category === 'commercial'
+          (b) =>
+            b.category === 'park' ||
+            b.category === 'residential' ||
+            b.category === 'commercial' ||
+            b.category === 'workplace'
         );
         if (shore.length > 0 && origins.length > 0) {
-          const spot = shore[Math.floor(Math.random() * shore.length)];
-          const waterX = spot.tile.x + spot.waterDx;
-          const waterY = spot.tile.y + spot.waterDy;
-          const orig = origins[Math.floor(Math.random() * origins.length)];
-          const path = findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: spot.tile.x, y: spot.tile.y });
-          if (path) {
-            const activities: Array<'kayak' | 'rowing' | 'swim'> = ['kayak', 'rowing', 'swim'];
-            const existingActivities = new Set(
-              this.people.filter((p) => p.role === 'kayaker').map((p) => p.waterActivity || 'kayak')
-            );
-            const activity =
-              activities.find((a) => !existingActivities.has(a)) ||
-              activities[Math.floor(Math.random() * activities.length)];
-            const stallGoods: StallGoodsType =
-              activity === 'rowing' ? 'rowboat' : activity === 'swim' ? 'swim' : 'kayak';
-            const awningColor =
-              activity === 'rowing' ? '#B45309' : activity === 'swim' ? '#0284C7' : '#0891B2';
+          const waterCache = new Map<string, ReturnType<CitySimulation['getWaterBodyInfo']>>();
+          const getCachedWaterInfo = (wx: number, wy: number) => {
+            const key = `${wx},${wy}`;
+            let info = waterCache.get(key);
+            if (!info) {
+              info = this.getWaterBodyInfo(wx, wy);
+              for (const wt of info.tiles) {
+                waterCache.set(`${wt.x},${wt.y}`, info);
+              }
+            }
+            return info;
+          };
 
-            if (
-              spot.tile.terrain === 'grass' &&
-              !spot.tile.building &&
-              !this.marketStalls.some((s) => s.x === spot.tile.x && s.y === spot.tile.y) &&
-              this.marketStalls.length < 7 &&
-              !this.marketStalls.some((s) => s.goods === stallGoods)
-            ) {
-              this.marketStalls.push({
-                id: `stall_${this.stallIdCounter++}`,
-                x: spot.tile.x,
-                y: spot.tile.y,
-                wx: (spot.tile.x + 0.5) * TILE_SIZE,
-                wy: (spot.tile.y + 0.54) * TILE_SIZE,
-                goods: stallGoods,
-                awningColor,
-                vendorPersonId: orig.id,
-                stock: 6,
-                salesCount: 0,
-                age: 0,
-                maxAge: 85,
+          const largeWaterShore = shore.filter((spot) => {
+            const wx = spot.tile.x + spot.waterDx;
+            const wy = spot.tile.y + spot.waterDy;
+            return getCachedWaterInfo(wx, wy).isLargeForBoats;
+          });
+
+          const existingActivities = new Set(
+            this.people.filter((p) => p.role === 'kayaker').map((p) => p.waterActivity || 'kayak')
+          );
+
+          const eligibleActivities: Array<'kayak' | 'rowing' | 'swim'> =
+            largeWaterShore.length > 0 ? ['kayak', 'rowing', 'swim'] : ['swim'];
+          const activity =
+            eligibleActivities.find((a) => !existingActivities.has(a)) ||
+            eligibleActivities[Math.floor(Math.random() * eligibleActivities.length)];
+
+          const candidatePool = activity === 'swim' ? shore : largeWaterShore;
+          const stallGoods: StallGoodsType =
+            activity === 'rowing' ? 'rowboat' : activity === 'swim' ? 'swim' : 'kayak';
+
+          // Prefer an already-built boat/canoe dock on large water if one exists, otherwise pick a clear shore to build on
+          const existingBuiltDock =
+            activity !== 'swim'
+              ? candidatePool.find((sp) =>
+                  this.marketStalls.some(
+                    (st) => st.x === sp.tile.x && st.y === sp.tile.y && st.goods === stallGoods
+                  )
+                )
+              : undefined;
+
+          const spot =
+            existingBuiltDock && Math.random() < 0.55
+              ? existingBuiltDock
+              : candidatePool[Math.floor(Math.random() * candidatePool.length)];
+
+          if (spot) {
+            const waterX = spot.tile.x + spot.waterDx;
+            const waterY = spot.tile.y + spot.waterDy;
+            const waterInfo = getCachedWaterInfo(waterX, waterY);
+            const orig = origins[Math.floor(Math.random() * origins.length)];
+            const path = this.findPedestrianPath(
+              this.tiles,
+              { x: orig.x, y: orig.y },
+              { x: spot.tile.x, y: spot.tile.y }
+            );
+            if (path) {
+              const hasBuiltDockAtSpot =
+                activity === 'swim' ||
+                this.marketStalls.some(
+                  (st) =>
+                    st.goods === stallGoods &&
+                    Math.abs(st.x - spot.tile.x) <= 2 &&
+                    Math.abs(st.y - spot.tile.y) <= 2
+                );
+
+              const waterWaypoints =
+                activity !== 'swim'
+                  ? this.buildWaterCruisePath(waterX, waterY, waterInfo.tiles)
+                  : undefined;
+
+              this.people.push({
+                id: `ppl_${this.personIdCounter++}`,
+                role: 'kayaker',
+                waterActivity: activity,
+                waterTileX: waterX,
+                waterTileY: waterY,
+                boatBuilt: hasBuiltDockAtSpot,
+                waterWaypoints,
+                waterWaypointIndex: 0,
+                wx: (orig.x + 0.5) * TILE_SIZE,
+                wy: (orig.y + 0.78) * TILE_SIZE,
+                targetWx: (spot.tile.x + 0.5) * TILE_SIZE,
+                targetWy: (spot.tile.y + 0.5) * TILE_SIZE,
+                speed: 28,
+                shirtColor:
+                  activity === 'swim'
+                    ? ['#F43F5E', '#0EA5E9', '#10B981'][Math.floor(Math.random() * 3)]
+                    : activity === 'rowing'
+                    ? ['#D97706', '#2563EB', '#0F766E'][Math.floor(Math.random() * 3)]
+                    : ['#06B6D4', '#F59E0B', '#EC4899'][Math.floor(Math.random() * 3)],
+                hatColor: !hasBuiltDockAtSpot ? '#FDE047' : undefined,
+                animPhase: 0,
+                state: 'walking',
+                homeBuildingId: orig.id,
+                targetTileX: spot.tile.x,
+                targetTileY: spot.tile.y,
+                pedestrianPath: path,
+                pedestrianPathIndex: path.length > 1 ? 1 : 0,
+                holdTimer: 22 + Math.random() * 10,
               });
             }
-            this.people.push({
-              id: `ppl_${this.personIdCounter++}`,
-              role: 'kayaker',
-              waterActivity: activity,
-              waterTileX: waterX,
-              waterTileY: waterY,
-              wx: (orig.x + 0.5) * TILE_SIZE,
-              wy: (orig.y + 0.78) * TILE_SIZE,
-              targetWx: (spot.tile.x + 0.5) * TILE_SIZE,
-              targetWy: (spot.tile.y + 0.5) * TILE_SIZE,
-              speed: 28,
-              shirtColor:
-                activity === 'swim'
-                  ? ['#F43F5E', '#0EA5E9', '#10B981'][Math.floor(Math.random() * 3)]
-                  : activity === 'rowing'
-                  ? ['#D97706', '#2563EB', '#0F766E'][Math.floor(Math.random() * 3)]
-                  : ['#06B6D4', '#F59E0B', '#EC4899'][Math.floor(Math.random() * 3)],
-              animPhase: 0,
-              state: 'walking',
-              homeBuildingId: orig.id,
-              targetTileX: spot.tile.x,
-              targetTileY: spot.tile.y,
-              pedestrianPath: path,
-              pedestrianPathIndex: path.length > 1 ? 1 : 0,
-              holdTimer: 18 + Math.random() * 9,
-            });
           }
         }
       }
@@ -10235,7 +11664,7 @@ export class CitySimulation {
         this.fieldTripAccumulator = 0;
         const sch = schools[Math.floor(Math.random() * schools.length)];
         const dest = tripVenues[Math.floor(Math.random() * tripVenues.length)];
-        const path = findPedestrianPath(this.tiles, { x: sch.x, y: sch.y }, { x: dest.x, y: dest.y });
+        const path = this.findPedestrianPath(this.tiles, { x: sch.x, y: sch.y }, { x: dest.x, y: dest.y });
         if (path) {
           this.logDailyNews(`FIELD TRIP CHAOS: Kids from ${sch.name} cheered louder than fire sirens visiting ${dest.name} during school hours!`);
           for (let k = 0; k < 4; k++) {
@@ -10264,53 +11693,10 @@ export class CitySimulation {
       }
     }
 
-    // 3. Occasional Citizen Self-Building on empty grass near roads
-    const activeBuilders = this.people.filter((p) => p.role === 'builder').length;
-    if (!curfew && !isWarPanic && activeBuilders === 0 && this.buildingsList.length >= 4 && this.buildingsList.length < 48) {
-      this.citizenBuildAccumulator += simDt;
-      if (this.citizenBuildAccumulator >= 95) {
-        this.citizenBuildAccumulator = 0;
-        if (Math.random() < 0.42) {
-          const openLots = this.tiles.filter(
-            (t) =>
-              t.terrain === 'grass' &&
-              !t.hasRoad &&
-              !t.building &&
-              !this.marketStalls.some((s) => s.x === t.x && s.y === t.y) &&
-              getRoadNeighbors(this.tiles, t.x, t.y).length > 0
-          );
-          const homes = this.buildingsList.filter((b) => b.category === 'residential' || b.category === 'workplace');
-          if (openLots.length > 0 && homes.length > 0) {
-            const lot = openLots[Math.floor(Math.random() * openLots.length)];
-            const orig = homes[Math.floor(Math.random() * homes.length)];
-            const path = findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: lot.x, y: lot.y });
-            if (path) {
-              this.people.push({
-                id: `ppl_${this.personIdCounter++}`,
-                role: 'builder',
-                wx: (orig.x + 0.5) * TILE_SIZE,
-                wy: (orig.y + 0.78) * TILE_SIZE,
-                targetWx: (lot.x + 0.5) * TILE_SIZE,
-                targetWy: (lot.y + 0.65) * TILE_SIZE,
-                speed: 27,
-                shirtColor: '#F59E0B',
-                hatColor: '#FDE047',
-                animPhase: 0,
-                state: 'walking',
-                homeBuildingId: orig.id,
-                targetTileX: lot.x,
-                targetTileY: lot.y,
-                pedestrianPath: path,
-                pedestrianPathIndex: path.length > 1 ? 1 : 0,
-                holdTimer: 3.5,
-              });
-            }
-          }
-        }
-      }
-    }
+    // 3. Citizen Construction Proposals (to Mayor / User Allow or Decline) & Timed Construction Sites
+    this.updateConstructionProposalsAndSites(simDt, playAudio);
 
-    // 4. Step Water Sports (Kayakers, Rowers, Swimmers), Field Trip Students, and Citizen Builders
+    // 4. Step Water Sports (Human Boat/Canoe Builders, Paddlers, Rowers, Swimmers), Field Trips, and Citizen Builders
     for (let i = this.people.length - 1; i >= 0; i--) {
       const p = this.people[i];
 
@@ -10324,26 +11710,159 @@ export class CitySimulation {
         if (p.state === 'walking') {
           const res = this.stepPersonAlongPath(p, realDt, 7.5);
           if (res === 'arrived') {
-            p.state = 'kayaking';
-            this.economyScore = Math.min(100, this.economyScore + 0.25);
+            if (p.waterActivity !== 'swim' && !p.boatBuilt) {
+              // Ensure the water is still large & long before building the canoe/boat
+              const wtx = p.waterTileX ?? p.targetTileX;
+              const wty = p.waterTileY ?? p.targetTileY;
+              if (
+                wtx !== undefined &&
+                wty !== undefined &&
+                this.getWaterBodyInfo(wtx, wty).isLargeForBoats
+              ) {
+                p.state = 'building_boat';
+                p.holdTimer = 4.6;
+              } else {
+                if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+              }
+            } else {
+              p.state = 'kayaking';
+              this.economyScore = Math.min(100, this.economyScore + 0.25);
+            }
           } else if (res === 'blocked') {
             this.people.splice(i, 1);
+          }
+        } else if (p.state === 'building_boat') {
+          p.animPhase += realDt * 9.5;
+          p.holdTimer -= realDt;
+          if (Math.random() < realDt * 3.8) {
+            this.woodChips.push({
+              wx: p.wx + 5 + (Math.random() - 0.5) * 6,
+              wy: p.wy - 2,
+              vx: (Math.random() - 0.5) * 24,
+              vy: -12 - Math.random() * 12,
+              age: 0,
+              maxAge: 0.36,
+              color: Math.random() < 0.5 ? '#D97706' : '#FDE047',
+            });
+          }
+          if (p.holdTimer <= 0) {
+            const wtx = p.waterTileX;
+            const wty = p.waterTileY;
+            const shoreTile =
+              p.targetTileX !== undefined && p.targetTileY !== undefined
+                ? this.getTile(p.targetTileX, p.targetTileY)
+                : null;
+            const waterInfo =
+              wtx !== undefined && wty !== undefined
+                ? this.getWaterBodyInfo(wtx, wty)
+                : null;
+            if (!waterInfo || !waterInfo.isLargeForBoats) {
+              if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+              continue;
+            }
+            const stallGoods: StallGoodsType = p.waterActivity === 'rowing' ? 'rowboat' : 'kayak';
+            const awningColor = p.waterActivity === 'rowing' ? '#B45309' : '#0891B2';
+            if (
+              shoreTile &&
+              (shoreTile.terrain === 'grass' || shoreTile.terrain === 'sand') &&
+              !shoreTile.building &&
+              !shoreTile.hasRoad &&
+              !this.marketStalls.some((s) => s.x === shoreTile.x && s.y === shoreTile.y) &&
+              this.marketStalls.length < 8
+            ) {
+              this.marketStalls.push({
+                id: `stall_${this.stallIdCounter++}`,
+                x: shoreTile.x,
+                y: shoreTile.y,
+                wx: (shoreTile.x + 0.5) * TILE_SIZE,
+                wy: (shoreTile.y + 0.54) * TILE_SIZE,
+                goods: stallGoods,
+                awningColor,
+                vendorPersonId: p.homeBuildingId || p.id,
+                stock: 6,
+                salesCount: 0,
+                age: 0,
+                maxAge: 110,
+              });
+            }
+            this.floatingLabels.push({
+              wx: p.wx,
+              wy: p.wy - 12,
+              text: p.waterActivity === 'rowing' ? '+Built Boat!' : '+Built Canoe!',
+              color: '#FEF9C3',
+              bgColor: awningColor,
+              age: 0,
+              maxAge: 1.7,
+            });
+            if (playAudio) soundEngine.playPlantTree();
+            p.boatBuilt = true;
+            p.hatColor = undefined;
+            p.waterWaypoints = this.buildWaterCruisePath(wtx!, wty!, waterInfo.tiles);
+            p.waterWaypointIndex = 0;
+            p.holdTimer = 24 + Math.random() * 10;
+            p.state = 'kayaking';
+            p.wx = (wtx! + 0.5) * TILE_SIZE;
+            p.wy = (wty! + 0.5) * TILE_SIZE;
+            this.economyScore = Math.min(100, this.economyScore + 0.45);
           }
         } else if (p.state === 'kayaking') {
           const animRate = p.waterActivity === 'swim' ? 6.2 : p.waterActivity === 'rowing' ? 3.8 : 4.6;
           p.animPhase += realDt * animRate;
           p.holdTimer -= realDt;
-          const wtx = p.waterTileX ?? p.targetTileX;
-          const wty = p.waterTileY ?? p.targetTileY;
-          if (wtx !== undefined && wty !== undefined) {
-            const cx = (wtx + 0.5) * TILE_SIZE;
-            const cy = (wty + 0.5) * TILE_SIZE;
-            const rx = p.waterActivity === 'swim' ? 7 : 10;
-            const ry = p.waterActivity === 'swim' ? 4.5 : 5.5;
-            p.wx = cx + Math.sin(p.animPhase * 0.45) * rx;
-            p.wy = cy + Math.cos(p.animPhase * 0.9) * ry;
+
+          if (p.waterActivity !== 'swim' && p.waterWaypoints && p.waterWaypoints.length > 0) {
+            const wpIdx = p.waterWaypointIndex ?? 0;
+            const wp = p.waterWaypoints[wpIdx % p.waterWaypoints.length];
+            const wpTile = this.getTile(wp.x, wp.y);
+            if (!wpTile || wpTile.terrain !== 'water') {
+              if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+              continue;
+            }
+            const targetWx = (wp.x + 0.5) * TILE_SIZE;
+            const targetWy = (wp.y + 0.5) * TILE_SIZE;
+            const dx = targetWx - p.wx;
+            const dy = targetWy - p.wy;
+            const dist = Math.hypot(dx, dy);
+            if (dist < 6) {
+              p.waterWaypointIndex = (wpIdx + 1) % p.waterWaypoints.length;
+            } else {
+              const cruiseSpeed = p.waterActivity === 'rowing' ? 21 : 25;
+              const move = Math.min(dist, cruiseSpeed * realDt);
+              p.wx += (dx / dist) * move;
+              p.wy += (dy / dist) * move;
+              p.facingAngle = Math.atan2(dy, dx);
+            }
+          } else {
+            const wtx = p.waterTileX ?? p.targetTileX;
+            const wty = p.waterTileY ?? p.targetTileY;
+            if (wtx !== undefined && wty !== undefined) {
+              const cx = (wtx + 0.5) * TILE_SIZE;
+              const cy = (wty + 0.5) * TILE_SIZE;
+              const rx = p.waterActivity === 'swim' ? 7 : 10;
+              const ry = p.waterActivity === 'swim' ? 4.5 : 5.5;
+              p.wx = cx + Math.sin(p.animPhase * 0.45) * rx;
+              p.wy = cy + Math.cos(p.animPhase * 0.9) * ry;
+            }
           }
+
           if (p.holdTimer <= 0) {
+            const wtx = p.waterTileX;
+            const wty = p.waterTileY;
+            if (wtx !== undefined && wty !== undefined && p.waterActivity !== 'swim') {
+              const dockWx = (wtx + 0.5) * TILE_SIZE;
+              const dockWy = (wty + 0.5) * TILE_SIZE;
+              const dx = dockWx - p.wx;
+              const dy = dockWy - p.wy;
+              const dist = Math.hypot(dx, dy);
+              if (dist > 14 && !isWarPanic) {
+                const dockSpeed = 28;
+                const move = Math.min(dist, dockSpeed * realDt);
+                p.wx += (dx / dist) * move;
+                p.wy += (dy / dist) * move;
+                p.facingAngle = Math.atan2(dy, dx);
+                continue;
+              }
+            }
             if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
           }
         } else {
@@ -10384,20 +11903,30 @@ export class CitySimulation {
       }
 
       if (p.role === 'builder') {
+        const site = p.targetConstructionId
+          ? this.activeConstructions.find((c) => c.id === p.targetConstructionId)
+          : undefined;
         if (p.state === 'walking') {
+          if (!site) {
+            if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+            continue;
+          }
           const res = this.stepPersonAlongPath(p, realDt, 8);
           if (res === 'arrived') {
             p.state = 'building';
-            p.holdTimer = 3.2;
+            p.holdTimer = 999;
           } else if (res === 'blocked') {
             this.people.splice(i, 1);
           }
         } else if (p.state === 'building') {
+          if (!site) {
+            if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
+            continue;
+          }
           p.animPhase += realDt * 9;
-          p.holdTimer -= realDt;
-          if (Math.random() < realDt * 3) {
+          if (Math.random() < realDt * 3.4) {
             this.woodChips.push({
-              wx: p.wx + (Math.random() - 0.5) * 6,
+              wx: p.wx + (Math.random() - 0.5) * 8,
               wy: p.wy - 2,
               vx: (Math.random() - 0.5) * 24,
               vy: -12 - Math.random() * 12,
@@ -10406,36 +11935,289 @@ export class CitySimulation {
               color: '#FDE047',
             });
           }
-          if (p.holdTimer <= 0) {
-            if (p.targetTileX !== undefined && p.targetTileY !== undefined) {
-              const bpIds = ['cottage', 'park_bench', 'cafe', 'crops'];
-              const pickId = bpIds[Math.floor(Math.random() * bpIds.length)];
-              const bp = this.getAllBlueprints().find((b) => b.id === pickId);
-              const targetTile = this.getTile(p.targetTileX, p.targetTileY);
-              if (bp && targetTile && targetTile.terrain === 'grass' && !targetTile.hasRoad && !targetTile.building) {
-                const placed = this.placeBuilding(p.targetTileX, p.targetTileY, bp);
-                if (placed) {
-                  this.floatingLabels.push({
-                    wx: (placed.x + 0.5) * TILE_SIZE,
-                    wy: (placed.y + 0.25) * TILE_SIZE,
-                    text: `+Built ${placed.name}!`,
-                    color: '#FEF9C3',
-                    bgColor: '#0F766E',
-                    age: 0,
-                    maxAge: 1.9,
-                  });
-                  this.logDailyNews(`WAIT WHAT?! Neighbors randomly built a brand-new ${placed.name} overnight without telling anyone—and honestly, it rocks!`);
-                  if (playAudio) soundEngine.playPlantTree();
-                }
-              }
-            }
-            if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
-          }
         } else {
           p.holdTimer -= realDt;
           const res = this.stepPersonAlongPath(p, realDt, 8);
           if (res !== 'moving' || p.holdTimer <= 0) this.people.splice(i, 1);
         }
+      }
+    }
+  }
+
+  private dispatchBuildersForConstruction(site: ActiveConstruction) {
+    const origins = this.buildingsList
+      .filter((b) => b.category === 'residential' || b.category === 'workplace')
+      .sort(
+        (a, b) =>
+          Math.hypot(a.x - site.x, a.y - site.y) - Math.hypot(b.x - site.x, b.y - site.y)
+      );
+    if (origins.length === 0) return;
+
+    const crewCount = site.totalGameMinutes >= 160 ? 2 : 1;
+    let spawned = 0;
+    for (const orig of origins.slice(0, 5)) {
+      const path = this.findPedestrianPath(this.tiles, { x: orig.x, y: orig.y }, { x: site.x, y: site.y });
+      if (!path) continue;
+      const offsetX = spawned === 0 ? 0.32 : 0.68;
+      this.people.push({
+        id: `ppl_${this.personIdCounter++}`,
+        role: 'builder',
+        wx: (orig.x + 0.5) * TILE_SIZE,
+        wy: (orig.y + 0.78) * TILE_SIZE,
+        targetWx: (site.x + offsetX) * TILE_SIZE,
+        targetWy: (site.y + 0.68) * TILE_SIZE,
+        speed: 28,
+        shirtColor: '#F59E0B',
+        hatColor: '#FDE047',
+        animPhase: spawned * 1.4,
+        state: 'walking',
+        homeBuildingId: orig.id,
+        targetConstructionId: site.id,
+        targetTileX: site.x,
+        targetTileY: site.y,
+        pedestrianPath: [...path],
+        pedestrianPathIndex: path.length > 1 ? 1 : 0,
+        holdTimer: 0,
+      });
+      spawned++;
+      if (spawned >= crewCount) break;
+    }
+  }
+
+  private tryCreateConstructionProposal() {
+    const openLots = this.tiles.filter(
+      (t) =>
+        (t.terrain === 'grass' || t.terrain === 'sand') &&
+        !t.hasRoad &&
+        !t.building &&
+        !this.marketStalls.some((s) => s.x === t.x && s.y === t.y) &&
+        !this.pendingProposals.some((p) => p.x === t.x && p.y === t.y) &&
+        !this.activeConstructions.some((c) => c.x === t.x && c.y === t.y) &&
+        !this.blastCraters.some((cr) => cr.x === t.x && cr.y === t.y) &&
+        this.getRoadNeighbors(this.tiles, t.x, t.y).length > 0
+    );
+    if (openLots.length === 0) return;
+
+    const allBps = this.getAllBlueprints();
+    const candidateSpecs: Array<{
+      blueprintId: string;
+      displayName?: string;
+      minMins: number;
+      maxMins: number;
+      note: string;
+    }> = [
+      {
+        blueprintId: 'house',
+        displayName: 'House',
+        minMins: 100,
+        maxMins: 170,
+        note: 'Family home near the street',
+      },
+      {
+        blueprintId: 'house',
+        displayName: 'Cozy Cottage',
+        minMins: 90,
+        maxMins: 150,
+        note: 'Two-bedroom timber cottage',
+      },
+      {
+        blueprintId: 'electronics_shop',
+        displayName: 'Electronics Shop',
+        minMins: 160,
+        maxMins: 240,
+        note: 'Gadgets, repairs & neon display corner',
+      },
+      {
+        blueprintId: 'bakery',
+        displayName: 'Bakery',
+        minMins: 130,
+        maxMins: 200,
+        note: 'Morning bread & pastry counter',
+      },
+      {
+        blueprintId: 'cafe',
+        displayName: 'Neighborhood Cafe',
+        minMins: 120,
+        maxMins: 190,
+        note: 'Coffee shop for commuters & students',
+      },
+      {
+        blueprintId: 'market',
+        displayName: 'Corner Market',
+        minMins: 150,
+        maxMins: 220,
+        note: 'Fresh meat, groceries & pantry supplies',
+      },
+      {
+        blueprintId: 'flower_shop',
+        displayName: 'Florist',
+        minMins: 110,
+        maxMins: 170,
+        note: 'Neighborhood flower & plant boutique',
+      },
+      {
+        blueprintId: 'bookshop',
+        displayName: 'Bookshop',
+        minMins: 120,
+        maxMins: 185,
+        note: 'Quiet reading & stationery corner',
+      },
+      {
+        blueprintId: 'office',
+        displayName: 'Small Office',
+        minMins: 180,
+        maxMins: 260,
+        note: 'Local studio workspace',
+      },
+      {
+        blueprintId: 'park',
+        displayName: 'Pocket Park',
+        minMins: 80,
+        maxMins: 140,
+        note: 'Community benches & greenery',
+      },
+    ];
+
+    const lot = openLots[Math.floor(Math.random() * openLots.length)];
+    const spec = candidateSpecs[Math.floor(Math.random() * candidateSpecs.length)];
+    const baseBp = allBps.find((b) => b.id === spec.blueprintId) || allBps[0];
+    if (!baseBp) return;
+
+    const applicants = [
+      'Maya Lin',
+      'Tariq Hassan',
+      'Elena Vance',
+      'Noah Patel',
+      'Clara Kim',
+      'Samir Ortiz',
+      'Hannah Brooks',
+      'Leo Chen',
+      'Nadia Kovacs',
+      'Owen Murphy',
+    ];
+    const applicantName = applicants[Math.floor(Math.random() * applicants.length)];
+    const durationRaw = spec.minMins + Math.random() * (spec.maxMins - spec.minMins);
+    const durationGameMinutes = Math.round(durationRaw / 10) * 10;
+    const areaName = this.describeArea(lot.x, lot.y);
+
+    this.pendingProposals.push({
+      id: `prop_${this.proposalIdCounter++}`,
+      applicantName,
+      blueprintId: baseBp.id,
+      blueprintName: spec.displayName || baseBp.name,
+      category: baseBp.category,
+      iconGrid: [...baseBp.iconGrid],
+      accentColor: baseBp.accentColor,
+      x: lot.x,
+      y: lot.y,
+      areaName,
+      durationGameMinutes,
+      note: spec.note,
+      createdAtDay: this.dayCount,
+    });
+
+    this.floatingLabels.push({
+      wx: (lot.x + 0.5) * TILE_SIZE,
+      wy: (lot.y + 0.25) * TILE_SIZE,
+      text: 'Permit Proposed!',
+      color: '#0F172A',
+      bgColor: '#FDE047',
+      age: 0,
+      maxAge: 2.0,
+    });
+  }
+
+  private updateConstructionProposalsAndSites(simDt: number, playAudio: boolean) {
+    // 1. Prune stale pending proposals whose lots became blocked/occupied
+    for (let i = this.pendingProposals.length - 1; i >= 0; i--) {
+      const pr = this.pendingProposals[i];
+      const tile = this.getTile(pr.x, pr.y);
+      if (
+        !tile ||
+        (tile.terrain !== 'grass' && tile.terrain !== 'sand') ||
+        tile.hasRoad ||
+        tile.building ||
+        this.activeConstructions.some((c) => c.x === pr.x && c.y === pr.y)
+      ) {
+        this.pendingProposals.splice(i, 1);
+      }
+    }
+
+    // 2. Advance active construction sites by elapsed game minutes (4 game mins / 1s at 1x)
+    for (let i = this.activeConstructions.length - 1; i >= 0; i--) {
+      const c = this.activeConstructions[i];
+      const tile = this.getTile(c.x, c.y);
+      if (!tile || tile.terrain === 'water' || tile.terrain === 'void' || tile.hasRoad || tile.building) {
+        this.clearPermitsAtTile(c.x, c.y);
+        continue;
+      }
+
+      // Ensure at least one builder is assigned when awake/safe
+      const hasBuilder = this.people.some((p) => p.role === 'builder' && p.targetConstructionId === c.id);
+      if (!hasBuilder && !this.isOutdoorCurfew()) {
+        this.dispatchBuildersForConstruction(c);
+      }
+
+      c.elapsedGameMinutes += simDt * 4;
+      if (c.elapsedGameMinutes >= c.totalGameMinutes) {
+        this.activeConstructions.splice(i, 1);
+        const baseBp = this.getAllBlueprints().find((b) => b.id === c.blueprintId);
+        const finishBp: BuildingBlueprint = baseBp
+          ? {
+              ...baseBp,
+              name: c.blueprintName,
+              iconGrid: [...c.iconGrid],
+              accentColor: c.accentColor,
+            }
+          : {
+              id: c.blueprintId,
+              name: c.blueprintName,
+              category: c.category,
+              iconGrid: [...c.iconGrid],
+              accentColor: c.accentColor,
+              capacity: c.category === 'residential' ? 4 : 18,
+            };
+        const placed = this.placeBuilding(c.x, c.y, finishBp);
+        if (placed) {
+          this.floatingLabels.push({
+            wx: (placed.x + 0.5) * TILE_SIZE,
+            wy: (placed.y + 0.25) * TILE_SIZE,
+            text: `+Built ${placed.name}!`,
+            color: '#FEF9C3',
+            bgColor: '#0F766E',
+            age: 0,
+            maxAge: 2.0,
+          });
+          this.logDailyNews(
+            `PERMIT COMPLETED: ${c.applicantName} finished constructing a new ${placed.name} at ${c.areaName} (${c.x}, ${c.y})!`
+          );
+          if (playAudio) soundEngine.playPlantTree();
+        }
+        for (const p of this.people) {
+          if (p.targetConstructionId === c.id) {
+            p.targetConstructionId = undefined;
+            if (!this.assignReturnRoute(p)) {
+              p.state = 'returning';
+              p.holdTimer = 0;
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Citizens file new construction proposals to the Mayor for approval
+    const isWarPanic = this.crises.warActive || this.people.some((o) => o.role === 'invader');
+    if (
+      !isWarPanic &&
+      this.buildingsList.length >= 3 &&
+      this.buildingsList.length < 64 &&
+      this.pendingProposals.length < 4 &&
+      this.activeConstructions.length < 4
+    ) {
+      this.citizenBuildAccumulator += simDt;
+      if (this.citizenBuildAccumulator >= 85) {
+        this.citizenBuildAccumulator = 0;
+        this.tryCreateConstructionProposal();
       }
     }
   }

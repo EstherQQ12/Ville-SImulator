@@ -14,6 +14,7 @@ export type ToolMode =
   | 'plot'
   | 'water'
   | 'forest'
+  | 'land'
   | 'bulldoze'
   | 'camera';
 
@@ -35,7 +36,9 @@ export type BuildingCategory =
   | 'crops'
   | 'park';
 
-export type TerrainType = 'grass' | 'water' | 'forest';
+export type TerrainType = 'grass' | 'water' | 'forest' | 'sand' | 'void';
+
+export type MapTemplateKind = 'valley' | 'island' | 'archipelago' | 'jungle' | 'river' | 'pond';
 
 export type TimePhase = 'Dawn' | 'Day' | 'Dusk' | 'Night';
 
@@ -124,9 +127,27 @@ export type HobbyKind =
   | 'bird_feeding'
   | 'skateboarding';
 
-export type CarryingItem = 'fish' | 'bag' | 'coffee' | 'flowers' | 'books' | 'clothes' | 'produce';
+export type CarryingItem =
+  | 'fish'
+  | 'bag'
+  | 'coffee'
+  | 'flowers'
+  | 'books'
+  | 'clothes'
+  | 'produce'
+  | 'meat'
+  | 'electronics';
 
-export type StallGoodsType = 'fish' | 'clothes' | 'produce' | 'crafts' | 'kayak' | 'rowboat' | 'swim' | 'contraband';
+export type StallGoodsType =
+  | 'fish'
+  | 'clothes'
+  | 'produce'
+  | 'meat'
+  | 'crafts'
+  | 'kayak'
+  | 'rowboat'
+  | 'swim'
+  | 'contraband';
 
 export type PersonRole =
   | 'woodcutter'
@@ -196,9 +217,12 @@ export interface Person {
     | 'voting'
     | 'escaping'
     | 'delivering'
+    | 'delivering_paper'
     | 'kayaking'
     | 'field_trip'
+    | 'playing_park'
     | 'building'
+    | 'building_boat'
     | 'farming'
     | 'butchering';
   homeBuildingId?: string;
@@ -236,7 +260,12 @@ export interface Person {
   waterActivity?: 'kayak' | 'rowing' | 'swim';
   waterTileX?: number;
   waterTileY?: number;
+  boatBuilt?: boolean;
+  waterWaypoints?: GridPoint[];
+  waterWaypointIndex?: number;
   targetAnimalId?: string;
+  targetConstructionId?: string;
+  hasBicycle?: boolean;
   holdTimer: number;
 }
 
@@ -276,6 +305,37 @@ export interface MarketStall {
   raidCarId?: string;
   age: number;
   maxAge: number;
+}
+
+export interface ConstructionProposal {
+  id: string;
+  applicantName: string;
+  blueprintId: string;
+  blueprintName: string;
+  category: BuildingCategory;
+  iconGrid: string[];
+  accentColor: string;
+  x: number;
+  y: number;
+  areaName: string;
+  durationGameMinutes: number;
+  note: string;
+  createdAtDay: number;
+}
+
+export interface ActiveConstruction {
+  id: string;
+  applicantName: string;
+  blueprintId: string;
+  blueprintName: string;
+  category: BuildingCategory;
+  iconGrid: string[];
+  accentColor: string;
+  x: number;
+  y: number;
+  areaName: string;
+  totalGameMinutes: number;
+  elapsedGameMinutes: number;
 }
 
 export type CrisisType = 'virus' | 'war' | 'poverty' | 'pollution' | 'tornado' | 'earthquake' | 'flood';
@@ -543,6 +603,7 @@ export interface MapTile {
   x: number;
   y: number;
   terrain: TerrainType;
+  isDefaultLand?: boolean;
   hasRoad: boolean;
   hasZebraCrossing?: boolean;
   hasFootbridge?: boolean;
@@ -630,12 +691,24 @@ export interface TrashItem {
 
 export interface PorchPaperProp {
   id?: string;
+  buildingId?: string;
   x?: number;
   y?: number;
   wx: number;
   wy: number;
   age: number;
   maxAge?: number;
+  pickedUp?: boolean;
+}
+
+export interface NewspaperComment {
+  id: string;
+  author: string;
+  avatarColor?: string;
+  mood?: string;
+  reaction?: string;
+  text: string;
+  likes?: number;
 }
 
 export interface NewspaperEdition {
@@ -650,6 +723,7 @@ export interface NewspaperEdition {
   publishedAtTime: string;
   photoDataUrl?: string;
   isUserAuthored?: boolean;
+  readerComments?: NewspaperComment[];
 }
 
 export interface HonkRipple {
@@ -721,6 +795,44 @@ export interface SimulationStats {
   tornadoActive: boolean;
   earthquakeActive: boolean;
   floodActive: boolean;
+  gridCols: number;
+  gridRows: number;
+  expansionCredits: number;
+  lastExpansionMilestone: number;
+  pendingProposalsCount: number;
+  activeConstructionsCount: number;
+}
+
+export interface SavedSimState {
+  gridCols: number;
+  gridRows: number;
+  dayCount: number;
+  minutesOfDay: number;
+  seasonIndex: number;
+  season: SeasonType;
+  weather: WeatherType;
+  weatherTimer?: number;
+  expansionCredits: number;
+  lastExpansionMilestone: number;
+  newspapers: NewspaperEdition[];
+  hasNukeOccurred: boolean;
+  totalDeaths: number;
+  mayorAlive: boolean;
+  completedTrips?: number;
+  stoppedRobberies?: number;
+  capturedProtesters?: number;
+  choppedTrees?: number;
+  plantedTrees?: number;
+  totalCrashes?: number;
+  fishCaught?: number;
+  prisonInmates?: number;
+  totalJailed?: number;
+  totalReleased?: number;
+  totalLawsuits?: number;
+  citizenHappiness?: number;
+  economyScore?: number;
+  pendingProposals?: ConstructionProposal[];
+  activeConstructions?: ActiveConstruction[];
 }
 
 export interface SavedMapData {
@@ -728,10 +840,14 @@ export interface SavedMapData {
   name: string;
   subtitle: string;
   updatedAt: number;
+  gridCols?: number;
+  gridRows?: number;
+  template?: MapTemplateKind;
   tiles: {
     x: number;
     y: number;
     terrain: TerrainType;
+    isDefaultLand?: boolean;
     hasRoad: boolean;
     hasZebraCrossing?: boolean;
     hasFootbridge?: boolean;
@@ -739,6 +855,7 @@ export interface SavedMapData {
     building?: PlacedBuilding | null;
   }[];
   customBlueprints: BuildingBlueprint[];
+  simState?: SavedSimState;
 }
 
 export interface SelectionTarget {

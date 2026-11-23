@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { FolderOpen, Save, Trash2, X } from 'lucide-react';
-import { PRESET_MAPS } from '../data/defaultBlueprints';
-import { SavedMapData } from '../types/game';
+import { Compass, FolderOpen, Save, Trash2, X } from 'lucide-react';
+import { BIOME_TEMPLATES, PRESET_MAPS } from '../data/defaultBlueprints';
+import { MapTemplateKind, SavedMapData } from '../types/game';
 import { soundEngine } from '../utils/sound';
 
 interface MapManagerModalProps {
@@ -11,6 +11,7 @@ interface MapManagerModalProps {
   onClose: () => void;
   onSaveMap: (name: string) => void;
   onLoadMap: (map: SavedMapData) => void;
+  onCreateBiomeMap: (template: MapTemplateKind, name?: string) => void;
   onDeleteSavedMap: (id: string) => void;
 }
 
@@ -21,9 +22,12 @@ export function MapManagerModal({
   onClose,
   onSaveMap,
   onLoadMap,
+  onCreateBiomeMap,
   onDeleteSavedMap,
 }: MapManagerModalProps) {
   const [saveName, setSaveName] = useState(currentMapName);
+  const [selectedTemplate, setSelectedTemplate] = useState<MapTemplateKind>('island');
+  const [newMapName, setNewMapName] = useState('');
 
   if (!isOpen) return null;
 
@@ -34,14 +38,25 @@ export function MapManagerModal({
     onSaveMap(trimmed);
   };
 
+  const handleCreateBiome = (e: React.FormEvent) => {
+    e.preventDefault();
+    soundEngine.playUiTick();
+    onCreateBiomeMap(selectedTemplate, newMapName.trim() || undefined);
+    setNewMapName('');
+    onClose();
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4"
+      onWheel={(e) => e.stopPropagation()}
+    >
       <div className="w-full max-w-2xl bg-[#0F172A] border border-slate-700/80 rounded-xl shadow-2xl overflow-hidden text-slate-100">
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-900/60">
           <div>
-            <h2 className="font-display text-lg font-bold text-white">Maps &amp; Presets</h2>
+            <h2 className="font-display text-lg font-bold text-white">Maps &amp; Biomes</h2>
             <p className="text-xs text-slate-400">
-              Save your custom city layout or load another neighborhood
+              Save your city, load presets, or start fresh on an Island, Archipelago, Jungle, River, or Pond
             </p>
           </div>
           <button
@@ -54,7 +69,7 @@ export function MapManagerModal({
           </button>
         </div>
 
-        <div className="p-5 space-y-5 max-h-[75vh] overflow-y-auto">
+        <div className="p-5 space-y-5 max-h-[78dvh] overflow-y-auto touch-pan-y">
           {/* Save Current Map */}
           <form onSubmit={handleSave} className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5">
             <div className="text-xs font-medium text-slate-300 mb-2">Save Current Map</div>
@@ -73,6 +88,61 @@ export function MapManagerModal({
               >
                 <Save className="w-4 h-4" />
                 Save Map
+              </button>
+            </div>
+          </form>
+
+          {/* Create New Terrain Biome */}
+          <form onSubmit={handleCreateBiome} className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
+                <Compass className="w-3.5 h-3.5" />
+                Create New World Biome
+              </span>
+              <span className="text-[11px] text-slate-400">Thick forests spawn more wild animals</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {BIOME_TEMPLATES.map((tpl) => {
+                const active = selectedTemplate === tpl.id;
+                return (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    onClick={() => setSelectedTemplate(tpl.id)}
+                    className={`text-left p-2.5 rounded-lg border transition-colors ${
+                      active
+                        ? 'bg-slate-800 border-amber-400 text-white'
+                        : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 text-xs font-semibold">
+                      <span
+                        className="w-2.5 h-2.5 rounded-sm shrink-0"
+                        style={{ backgroundColor: tpl.accent }}
+                      />
+                      <span className="truncate">{tpl.name}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-1 line-clamp-2">
+                      {tpl.description}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newMapName}
+                onChange={(e) => setNewMapName(e.target.value)}
+                maxLength={28}
+                placeholder="Optional world name..."
+                className="flex-1 px-3 py-1.5 text-xs bg-slate-950 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-amber-400"
+              />
+              <button
+                type="submit"
+                className="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition-colors whitespace-nowrap shrink-0"
+              >
+                Create &amp; Play
               </button>
             </div>
           </form>

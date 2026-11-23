@@ -2,8 +2,6 @@ import { WINDOW_GLOW_COLORS } from '../data/defaultBlueprints';
 import {
   BuildingBlueprint,
   Car,
-  GRID_COLS,
-  GRID_ROWS,
   ICON_SIZE,
   MapTile,
   Person,
@@ -145,7 +143,8 @@ export function renderSimulation(
   const { nightFactor, goldenFactor, shadowOffsetX, shadowOffsetY } = getDaylightFactors(sim.minutesOfDay);
 
   // Outer horizon backdrop (cheerful sky-teal by day, starry deep blue by night)
-  ctx.fillStyle = nightFactor > 0.55 ? '#0B162C' : nightFactor > 0.2 ? '#1A3A5C' : '#1E5B7A';
+  const backdropColor = nightFactor > 0.55 ? '#0B162C' : nightFactor > 0.2 ? '#1A3A5C' : '#1E5B7A';
+  ctx.fillStyle = backdropColor;
   ctx.fillRect(0, 0, width, height);
 
   ctx.save();
@@ -160,25 +159,61 @@ export function renderSimulation(
   const halfW = width / (2 * camera.zoom);
   const halfH = height / (2 * camera.zoom);
   const minX = Math.max(0, Math.floor((camera.x - halfW) / TILE_SIZE) - 1);
-  const maxX = Math.min(GRID_COLS - 1, Math.ceil((camera.x + halfW) / TILE_SIZE) + 1);
+  const maxX = Math.min(sim.gridCols - 1, Math.ceil((camera.x + halfW) / TILE_SIZE) + 1);
   const minY = Math.max(0, Math.floor((camera.y - halfH) / TILE_SIZE) - 1);
-  const maxY = Math.min(GRID_ROWS - 1, Math.ceil((camera.y + halfH) / TILE_SIZE) + 1);
-
-  // Map outer frame shadow
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
-  ctx.fillRect(6, 8, GRID_COLS * TILE_SIZE, GRID_ROWS * TILE_SIZE);
+  const maxY = Math.min(sim.gridRows - 1, Math.ceil((camera.y + halfH) / TILE_SIZE) + 1);
+  const isWindy = sim.weather === 'Windy';
 
   // 1. Render Base Terrain Tiles
   for (let y = minY; y <= maxY; y++) {
     for (let x = minX; x <= maxX; x++) {
-      const tile = sim.tiles[y * GRID_COLS + x];
+      const tile = sim.tiles[y * sim.gridCols + x];
       const wx = x * TILE_SIZE;
       const wy = y * TILE_SIZE;
+
+      if (tile.terrain === 'void') {
+        ctx.fillStyle = backdropColor;
+        ctx.fillRect(wx, wy, TILE_SIZE, TILE_SIZE);
+        if (toolMode === 'land' && sim.canPlaceExpansionLandAt(x, y)) {
+          ctx.save();
+          ctx.fillStyle = 'rgba(52, 211, 153, 0.14)';
+          ctx.fillRect(wx + 2, wy + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+          ctx.strokeStyle = 'rgba(52, 211, 153, 0.65)';
+          ctx.lineWidth = 1.2;
+          ctx.setLineDash([4, 4]);
+          ctx.strokeRect(wx + 2, wy + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+          ctx.restore();
+        }
+        continue;
+      }
 
       if (tile.terrain === 'water') {
         drawWaterTile(ctx, sim, tile, wx, wy, wallTimeSeconds);
         if (tile.hasFootbridge) {
           drawFootbridgeTile(ctx, sim, tile);
+        }
+      } else if (tile.terrain === 'sand') {
+        const alt = (x + y) % 2 === 0;
+        ctx.fillStyle =
+          sim.season === 'Winter'
+            ? alt
+              ? '#E2E0D4'
+              : '#D6D4C8'
+            : alt
+            ? '#EED6A4'
+            : '#E5CA94';
+        ctx.fillRect(wx, wy, TILE_SIZE, TILE_SIZE);
+        if (!tile.hasRoad && !tile.building) {
+          const hash = ((x * 59 + y * 107) ^ (x * y * 19)) >>> 0;
+          ctx.fillStyle = 'rgba(180, 132, 68, 0.36)';
+          ctx.fillRect(wx + 10 + (hash % 24), wy + 12 + ((hash >> 3) % 22), 2.2, 1.8);
+          ctx.fillRect(wx + 26 - (hash % 12), wy + 30 - ((hash >> 5) % 10), 1.8, 1.8);
+          if (hash % 4 === 0) {
+            ctx.fillStyle = 'rgba(255, 251, 235, 0.72)';
+            ctx.beginPath();
+            ctx.arc(wx + 18 + (hash % 14), wy + 22 + ((hash >> 4) % 12), 1.6, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
       } else {
         // Seasonal meadow ground checkerboard
@@ -202,11 +237,11 @@ export function renderSimulation(
         ctx.fillRect(wx, wy, TILE_SIZE, TILE_SIZE);
 
         if (!tile.hasRoad && !tile.building && tile.terrain === 'grass') {
-          drawGrassDetails(ctx, wx, wy, x, y, wallTimeSeconds, sim.season);
+          drawGrassDetails(ctx, wx, wy, x, y, wallTimeSeconds, sim.season, isWindy);
         }
 
         if (tile.terrain === 'forest') {
-          drawForestTile(ctx, wx, wy, x, y, shadowOffsetX, shadowOffsetY, sim.season);
+          drawForestTile(ctx, wx, wy, x, y, shadowOffsetX, shadowOffsetY, sim.season, wallTimeSeconds, isWindy);
         }
       }
 
@@ -224,6 +259,12 @@ export function renderSimulation(
         ctx.stroke();
       }
 
+      if (toolMode === 'land' && !tile.isDefaultLand) {
+        ctx.strokeStyle = 'rgba(250, 204, 21, 0.45)';
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(wx + 1.5, wy + 1.5, TILE_SIZE - 3, TILE_SIZE - 3);
+      }
+
       if (showGrid) {
         ctx.strokeStyle =
           sim.season === 'Winter' ? 'rgba(51, 65, 85, 0.14)' : 'rgba(255, 255, 255, 0.14)';
@@ -236,8 +277,8 @@ export function renderSimulation(
   // 2. Render Roads, Bridges, Markings & Congestion Heatmap
   for (let y = minY; y <= maxY; y++) {
     for (let x = minX; x <= maxX; x++) {
-      const tile = sim.tiles[y * GRID_COLS + x];
-      if (!tile.hasRoad) continue;
+      const tile = sim.tiles[y * sim.gridCols + x];
+      if (!tile.hasRoad || tile.terrain === 'void') continue;
       drawRoadTile(ctx, sim, tile, showTrafficOverlay);
     }
   }
@@ -249,16 +290,18 @@ export function renderSimulation(
   // 3. Render Placed Buildings & Custom Pixel Icons
   for (let y = minY; y <= maxY; y++) {
     for (let x = minX; x <= maxX; x++) {
-      const tile = sim.tiles[y * GRID_COLS + x];
-      if (!tile.building) continue;
+      const tile = sim.tiles[y * sim.gridCols + x];
+      if (!tile.building || tile.terrain === 'void') continue;
       drawBuildingTile(ctx, sim, tile, shadowOffsetX, shadowOffsetY, wallTimeSeconds);
     }
   }
 
-  // 3.5 Render Felled Tree Stumps, Trash Items & Pop-up Market Stalls
+  // 3.5 Render Felled Tree Stumps, Trash Items, Porch Papers & Pop-up Market Stalls
   drawChoppedTreeEvents(ctx, sim);
   drawTrashItems(ctx, sim, wallTimeSeconds);
+  drawPorchPapers(ctx, sim);
   drawMarketStalls(ctx, sim, wallTimeSeconds);
+  drawProposalsAndConstructions(ctx, sim, wallTimeSeconds);
 
   // 4. Render Cars, Hover Destination & Crashes
   for (const car of sim.cars) {
@@ -295,18 +338,18 @@ export function renderSimulation(
   const smogFactor = Math.max(0, Math.min(1, (sim.crises.pollutionLevel - 18) / 82));
   if (smogFactor > 0.01) {
     ctx.fillStyle = `rgba(98, 114, 42, ${smogFactor * 0.22})`;
-    ctx.fillRect(0, 0, GRID_COLS * TILE_SIZE, GRID_ROWS * TILE_SIZE);
+    ctx.fillRect(0, 0, sim.gridCols * TILE_SIZE, sim.gridRows * TILE_SIZE);
   }
 
   if (goldenFactor > 0.02) {
     ctx.fillStyle = `rgba(249, 115, 22, ${goldenFactor * 0.16})`;
-    ctx.fillRect(0, 0, GRID_COLS * TILE_SIZE, GRID_ROWS * TILE_SIZE);
+    ctx.fillRect(0, 0, sim.gridCols * TILE_SIZE, sim.gridRows * TILE_SIZE);
   }
 
   if (nightFactor > 0.02) {
     // Cozy twilight/midnight darkness wash (luminous rather than pitch black)
     ctx.fillStyle = `rgba(10, 18, 44, ${nightFactor * 0.56})`;
-    ctx.fillRect(0, 0, GRID_COLS * TILE_SIZE, GRID_ROWS * TILE_SIZE);
+    ctx.fillRect(0, 0, sim.gridCols * TILE_SIZE, sim.gridRows * TILE_SIZE);
 
     const lightStrength = smoothstep(0.15, 0.85, nightFactor);
     if (lightStrength > 0.02) {
@@ -317,9 +360,9 @@ export function renderSimulation(
   // 7. Traffic Signals & Neighbourhood Labels & Civic Alerts (crisp above night wash)
   for (let y = minY; y <= maxY; y++) {
     for (let x = minX; x <= maxX; x++) {
-      const tile = sim.tiles[y * GRID_COLS + x];
-      if (!tile.hasRoad) continue;
-      if (isIntersectionTile(sim.tiles, x, y)) {
+      const tile = sim.tiles[y * sim.gridCols + x];
+      if (!tile.hasRoad || tile.terrain === 'void') continue;
+      if (isIntersectionTile(sim.tiles, x, y, sim.gridCols, sim.gridRows)) {
         drawIntersectionControl(ctx, sim, tile, nightFactor);
       }
     }
@@ -347,7 +390,7 @@ export function renderSimulation(
     drawCornerReticle(ctx, sx, sy, TILE_SIZE, '#FACC15', 2.5);
   }
 
-  if (hover.visible && hover.tileX >= 0 && hover.tileX < GRID_COLS && hover.tileY >= 0 && hover.tileY < GRID_ROWS) {
+  if (hover.visible && hover.tileX >= 0 && hover.tileX < sim.gridCols && hover.tileY >= 0 && hover.tileY < sim.gridRows) {
     drawHoverPreview(ctx, sim, hover, toolMode, activeBlueprint);
   }
 
@@ -397,10 +440,13 @@ function drawGrassDetails(
   tx: number,
   ty: number,
   wallTimeSeconds: number,
-  season: SeasonType
+  season: SeasonType,
+  isWindy = false
 ) {
   const hash = ((tx * 73 + ty * 139) ^ (tx * ty * 31)) >>> 0;
-  const sway = Math.sin(wallTimeSeconds * 2.1 + tx * 0.7 + ty * 0.5) * 0.8;
+  const amp = isWindy ? 2.8 : 0.8;
+  const speed = isWindy ? 5.2 : 2.1;
+  const sway = Math.sin(wallTimeSeconds * speed + tx * 0.7 + ty * 0.5) * amp + (isWindy ? 1.4 : 0);
 
   if (season === 'Winter') {
     // Crisp winter snow tufts & frost sparkles
@@ -747,6 +793,24 @@ function drawMarketStalls(
       ctx.beginPath();
       ctx.arc(cx + 6, cy - 2.5, 2.1, 0, Math.PI * 2);
       ctx.fill();
+    } else if (stall.goods === 'meat') {
+      // Butcher wooden tray with marbled steak cuts & sausages
+      ctx.fillStyle = '#FDE68A';
+      ctx.fillRect(cx - 10, cy - 3.6, 20, 3.4);
+      ctx.fillStyle = '#DC2626';
+      ctx.beginPath();
+      ctx.ellipse(cx - 5, cy - 2.1, 3.1, 1.5, -0.1, 0, Math.PI * 2);
+      ctx.ellipse(cx + 2, cy - 2.1, 3.2, 1.5, 0.1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#FCA5A5';
+      ctx.fillRect(cx - 6.2, cy - 2.5, 2.2, 0.8);
+      ctx.fillRect(cx + 1.2, cy - 2.4, 2.2, 0.8);
+      ctx.fillStyle = '#991B1B';
+      ctx.beginPath();
+      ctx.arc(cx + 7.4, cy - 2.2, 1.7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#F8FAFC';
+      ctx.fillRect(cx + 7, cy - 2.5, 0.9, 0.7);
     } else if (stall.goods === 'kayak') {
       // Twin miniature kayaks on shore rack with paddles
       ctx.fillStyle = '#06B6D4';
@@ -842,10 +906,12 @@ function drawMarketStalls(
       ? 'CLOTHES'
       : stall.goods === 'produce'
       ? 'PRODUCE'
+      : stall.goods === 'meat'
+      ? 'MEAT'
       : stall.goods === 'kayak'
-      ? 'KAYAK'
+      ? 'CANOE'
       : stall.goods === 'rowboat'
-      ? 'ROWING'
+      ? 'BOATS'
       : stall.goods === 'swim'
       ? 'SWIM CLUB'
       : 'CRAFTS';
@@ -875,6 +941,132 @@ function drawMarketStalls(
   ctx.restore();
 }
 
+function drawProposalsAndConstructions(
+  ctx: CanvasRenderingContext2D,
+  sim: CitySimulation,
+  wallTimeSeconds: number
+) {
+  if (sim.pendingProposals.length === 0 && sim.activeConstructions.length === 0) return;
+  ctx.save();
+
+  // 1. Survey stakes & blueprint outline for pending Mayor permit proposals
+  for (const prop of sim.pendingProposals) {
+    const wx = prop.x * TILE_SIZE;
+    const wy = prop.y * TILE_SIZE;
+    const pulse = 0.55 + Math.sin(wallTimeSeconds * 3.5 + prop.x) * 0.25;
+
+    ctx.fillStyle = 'rgba(250, 204, 21, 0.14)';
+    ctx.fillRect(wx + 3, wy + 3, TILE_SIZE - 6, TILE_SIZE - 6);
+
+    ctx.save();
+    ctx.strokeStyle = `rgba(250, 204, 21, ${pulse})`;
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(wx + 3, wy + 3, TILE_SIZE - 6, TILE_SIZE - 6);
+    ctx.restore();
+
+    // Corner wooden survey stakes
+    ctx.fillStyle = '#B45309';
+    ctx.fillRect(wx + 3, wy + 3, 2.5, 5);
+    ctx.fillRect(wx + TILE_SIZE - 5.5, wy + 3, 2.5, 5);
+    ctx.fillRect(wx + 3, wy + TILE_SIZE - 8, 2.5, 5);
+    ctx.fillRect(wx + TILE_SIZE - 5.5, wy + TILE_SIZE - 8, 2.5, 5);
+
+    // Subtle blueprint ghost in center
+    const cached = getOrCreateIconCanvas(prop.iconGrid);
+    ctx.save();
+    ctx.globalAlpha = 0.34;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(cached.dayCanvas, wx + 8, wy + 8, TILE_SIZE - 16, TILE_SIZE - 16);
+    ctx.restore();
+
+    // Permit badge tag
+    const tag = 'PERMIT?';
+    ctx.font = '700 7px "Plus Jakarta Sans", sans-serif';
+    const tw = ctx.measureText(tag).width + 6;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+    ctx.beginPath();
+    ctx.roundRect(wx + TILE_SIZE / 2 - tw / 2, wy - 4, tw, 9, 2.5);
+    ctx.fill();
+    ctx.fillStyle = '#FDE047';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(tag, wx + TILE_SIZE / 2, wy + 0.5);
+  }
+
+  // 2. Active Construction Sites with dirt pad, scaffolding, crane & progress bar
+  for (const site of sim.activeConstructions) {
+    const wx = site.x * TILE_SIZE;
+    const wy = site.y * TILE_SIZE;
+    const progress = Math.max(0, Math.min(1, site.elapsedGameMinutes / Math.max(1, site.totalGameMinutes)));
+
+    // Graded construction dirt pad
+    ctx.fillStyle = '#A16207';
+    ctx.fillRect(wx + 4, wy + 5, TILE_SIZE - 8, TILE_SIZE - 9);
+    ctx.fillStyle = '#CA8A04';
+    ctx.fillRect(wx + 6, wy + 7, TILE_SIZE - 12, TILE_SIZE - 13);
+
+    // Rising target building silhouette
+    const cached = getOrCreateIconCanvas(site.iconGrid);
+    ctx.save();
+    ctx.globalAlpha = 0.25 + progress * 0.55;
+    ctx.imageSmoothingEnabled = false;
+    const revealH = Math.max(8, (TILE_SIZE - 12) * (0.3 + progress * 0.7));
+    ctx.drawImage(cached.dayCanvas, wx + 6, wy + TILE_SIZE - 6 - revealH, TILE_SIZE - 12, revealH);
+    ctx.restore();
+
+    // Timber / steel scaffolding frame around plot
+    ctx.strokeStyle = '#78350F';
+    ctx.lineWidth = 1.6;
+    ctx.strokeRect(wx + 5, wy + 6, TILE_SIZE - 10, TILE_SIZE - 11);
+    ctx.strokeStyle = '#D97706';
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    ctx.moveTo(wx + 5, wy + TILE_SIZE * 0.42);
+    ctx.lineTo(wx + TILE_SIZE - 5, wy + TILE_SIZE * 0.42);
+    ctx.moveTo(wx + 5, wy + TILE_SIZE * 0.68);
+    ctx.lineTo(wx + TILE_SIZE - 5, wy + TILE_SIZE * 0.68);
+    ctx.stroke();
+
+    // Mini yellow crane jib at top-right corner
+    const swing = Math.sin(wallTimeSeconds * 1.4 + site.x) * 2.5;
+    ctx.fillStyle = '#FACC15';
+    ctx.fillRect(wx + TILE_SIZE - 10, wy + 5, 2.2, 16);
+    ctx.strokeStyle = '#FACC15';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(wx + TILE_SIZE - 9, wy + 6);
+    ctx.lineTo(wx + TILE_SIZE * 0.42 + swing, wy + 2);
+    ctx.stroke();
+
+    // Orange safety cones on front corners
+    for (const cx of [wx + 7, wx + TILE_SIZE - 9]) {
+      ctx.fillStyle = '#F97316';
+      ctx.beginPath();
+      ctx.moveTo(cx, wy + TILE_SIZE - 4);
+      ctx.lineTo(cx + 2, wy + TILE_SIZE - 9);
+      ctx.lineTo(cx + 4, wy + TILE_SIZE - 4);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // Crisp construction progress bar
+    const barW = TILE_SIZE - 10;
+    const barX = wx + 5;
+    const barY = wy - 5;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+    ctx.beginPath();
+    ctx.roundRect(barX, barY, barW, 6, 2);
+    ctx.fill();
+    ctx.fillStyle = '#F59E0B';
+    ctx.beginPath();
+    ctx.roundRect(barX + 1, barY + 1, Math.max(2, (barW - 2) * progress), 4, 1.5);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
 function drawForestTile(
   ctx: CanvasRenderingContext2D,
   wx: number,
@@ -883,7 +1075,9 @@ function drawForestTile(
   ty: number,
   shadowX: number,
   shadowY: number,
-  season: SeasonType
+  season: SeasonType,
+  wallTimeSeconds = 0,
+  isWindy = false
 ) {
   const seed = (tx * 37 + ty * 17) % 7;
   const hasBlossom = (tx * 19 + ty * 23) % 5 === 0;
@@ -912,32 +1106,54 @@ function drawForestTile(
           { dx: 23, dy: 32, r: 10.5, c: '#15803D', hi: '#4ADE80' },
         ];
 
-  for (const t of trees) {
+  const gustBase = isWindy
+    ? Math.sin(wallTimeSeconds * 3.8 + tx * 0.55 + ty * 0.35) * 2.5 +
+      Math.cos(wallTimeSeconds * 2.1 + tx * 0.25) * 1.1 +
+      1.3
+    : Math.sin(wallTimeSeconds * 1.4 + tx * 0.6 + ty * 0.4) * 0.35;
+
+  trees.forEach((t, ti) => {
     const ox = t.dx + ((seed % 5) - 2) * 0.8;
     const oy = t.dy + (seed % 2) * 1.2;
+    const swayX = isWindy
+      ? gustBase + Math.sin(wallTimeSeconds * 5.1 + ti * 1.4 + ty) * 0.9
+      : gustBase;
+    const swayY = isWindy ? Math.cos(wallTimeSeconds * 4.2 + ti + tx * 0.4) * 0.65 : 0;
+
+    // Ground shadow
     ctx.fillStyle = 'rgba(0, 0, 0, 0.16)';
     ctx.beginPath();
-    ctx.arc(wx + ox + shadowX * 0.5, wy + oy + shadowY * 0.5, t.r, 0, Math.PI * 2);
+    ctx.arc(wx + ox + shadowX * 0.5 + swayX * 0.35, wy + oy + shadowY * 0.5, t.r, 0, Math.PI * 2);
     ctx.fill();
+
+    // Trunk peeking when wind bends canopy
+    if (isWindy) {
+      ctx.strokeStyle = '#78350F';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(wx + ox, wy + oy + 3);
+      ctx.lineTo(wx + ox + swayX * 0.8, wy + oy - 1);
+      ctx.stroke();
+    }
 
     ctx.fillStyle = t.c;
     ctx.beginPath();
-    ctx.arc(wx + ox, wy + oy, t.r, 0, Math.PI * 2);
+    ctx.arc(wx + ox + swayX, wy + oy + swayY, t.r, 0, Math.PI * 2);
     ctx.fill();
 
     ctx.fillStyle = t.hi;
     ctx.globalAlpha = season === 'Winter' ? 0.82 : 0.45;
     ctx.beginPath();
     ctx.arc(
-      wx + ox - 2.2,
-      wy + oy - 2.2,
+      wx + ox + swayX - 2.2,
+      wy + oy + swayY - 2.2,
       season === 'Winter' ? t.r * 0.58 : t.r * 0.45,
       0,
       Math.PI * 2
     );
     ctx.fill();
     ctx.globalAlpha = 1;
-  }
+  });
 }
 
 function drawRoadTile(
@@ -948,7 +1164,7 @@ function drawRoadTile(
 ) {
   const wx = tile.x * TILE_SIZE;
   const wy = tile.y * TILE_SIZE;
-  const mask = getEffectiveRoadMask(sim.tiles, tile.x, tile.y);
+  const mask = getEffectiveRoadMask(sim.tiles, tile.x, tile.y, sim.gridCols, sim.gridRows);
   const roadW = 34;
   const pad = (TILE_SIZE - roadW) / 2; // 7px curb margin
   const mid = TILE_SIZE / 2;
@@ -1251,38 +1467,103 @@ function drawBuildingTile(
   if (bld.category === 'park') {
     const variant = bld.parkVariant || 'playground';
     if (variant === 'playground') {
-      // Soft green lawn + sandy play pit + red slide + swing set
-      ctx.fillStyle = '#4ADE80';
+      // Natural green lawn + safety woodchip mulch play zone + animated swing set, slide, roundabout & climbing dome
+      ctx.fillStyle = sim.season === 'Winter' ? '#DCEAF7' : '#58B95B';
       ctx.fillRect(wx + 4, wy + 4, TILE_SIZE - 8, TILE_SIZE - 8);
-      ctx.fillStyle = '#FDE68A';
-      ctx.fillRect(wx + 8, wy + 18, TILE_SIZE - 16, 18);
-      // Slide
-      ctx.fillStyle = '#EF4444';
-      ctx.fillRect(wx + 11, wy + 12, 4, 12);
+      // Warm woodchip safety pit
+      ctx.fillStyle = '#D6A86E';
+      ctx.beginPath();
+      ctx.roundRect(wx + 7, wy + 13, TILE_SIZE - 14, TILE_SIZE - 20, 4);
+      ctx.fill();
+      ctx.strokeStyle = '#92400E';
+      ctx.lineWidth = 0.8;
+      ctx.strokeRect(wx + 7, wy + 13, TILE_SIZE - 14, TILE_SIZE - 20);
+
+      // Perimeter wooden fence posts
+      ctx.fillStyle = '#78350F';
+      for (const fx of [wx + 6, wx + 18, wx + 30, wx + 40]) {
+        ctx.fillRect(fx, wy + 5.5, 2, 3);
+      }
+
+      // Park bench at top left
+      ctx.fillStyle = '#92400E';
+      ctx.fillRect(wx + 8, wy + 7.5, 11, 3);
+      ctx.fillStyle = '#F59E0B';
+      ctx.fillRect(wx + 9, wy + 8, 9, 1.5);
+
+      // Colorful Slide (left)
+      ctx.fillStyle = '#DC2626';
+      ctx.fillRect(wx + 9.5, wy + 16, 3.2, 11.5);
       ctx.fillStyle = '#FACC15';
       ctx.beginPath();
-      ctx.moveTo(wx + 14, wy + 13);
-      ctx.lineTo(wx + 23, wy + 25);
-      ctx.lineTo(wx + 20, wy + 26);
-      ctx.lineTo(wx + 12, wy + 15);
+      ctx.moveTo(wx + 12.2, wy + 16.5);
+      ctx.lineTo(wx + 21.5, wy + 27);
+      ctx.lineTo(wx + 18.5, wy + 28.5);
+      ctx.lineTo(wx + 10.5, wy + 18.5);
       ctx.closePath();
       ctx.fill();
-      // Swing A-frame
+
+      // Spinning Merry-Go-Round Carousel (bottom-left center)
+      const spin = wallTimeSeconds * 2.4 + tile.x + tile.y;
+      const mcX = wx + 16;
+      const mcY = wy + 34.5;
+      ctx.fillStyle = '#E2E8F0';
+      ctx.beginPath();
+      ctx.arc(mcX, mcY, 5.2, 0, Math.PI * 2);
+      ctx.fill();
+      const carouselColors = ['#EF4444', '#3B82F6', '#F59E0B', '#10B981'];
+      for (let c = 0; c < 4; c++) {
+        const ang = spin + (c * Math.PI) / 2;
+        ctx.strokeStyle = carouselColors[c];
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(mcX, mcY);
+        ctx.lineTo(mcX + Math.cos(ang) * 4.6, mcY + Math.sin(ang) * 4.6);
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#0F172A';
+      ctx.beginPath();
+      ctx.arc(mcX, mcY, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Animated Swing Set (top-right)
+      const swing1 = Math.sin(wallTimeSeconds * 3.4 + tile.x) * 3.2;
+      const swing2 = Math.sin(wallTimeSeconds * 3.4 + tile.x + 1.4) * 3.2;
       ctx.strokeStyle = '#334155';
       ctx.lineWidth = 1.6;
       ctx.beginPath();
-      ctx.moveTo(wx + 26, wy + 24);
-      ctx.lineTo(wx + 28, wy + 12);
-      ctx.lineTo(wx + 37, wy + 12);
-      ctx.lineTo(wx + 39, wy + 24);
+      ctx.moveTo(wx + 25.5, wy + 27);
+      ctx.lineTo(wx + 27.5, wy + 14.5);
+      ctx.lineTo(wx + 38.5, wy + 14.5);
+      ctx.lineTo(wx + 40.5, wy + 27);
       ctx.stroke();
-      ctx.strokeStyle = '#0284C7';
-      ctx.lineWidth = 1.1;
+      ctx.strokeStyle = '#475569';
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(wx + 30.5, wy + 12);
-      ctx.lineTo(wx + 30.5, wy + 20);
-      ctx.moveTo(wx + 34.5, wy + 12);
-      ctx.lineTo(wx + 34.5, wy + 20);
+      ctx.moveTo(wx + 30.5, wy + 14.5);
+      ctx.lineTo(wx + 30.5 + swing1 * 0.45, wy + 22.5 + Math.abs(swing1) * 0.25);
+      ctx.moveTo(wx + 35.5, wy + 14.5);
+      ctx.lineTo(wx + 35.5 + swing2 * 0.45, wy + 22.5 + Math.abs(swing2) * 0.25);
+      ctx.stroke();
+      ctx.fillStyle = '#0284C7';
+      ctx.fillRect(wx + 29 + swing1 * 0.45, wy + 22 + Math.abs(swing1) * 0.25, 3, 1.6);
+      ctx.fillStyle = '#F43F5E';
+      ctx.fillRect(wx + 34 + swing2 * 0.45, wy + 22 + Math.abs(swing2) * 0.25, 3, 1.6);
+
+      // Geodesic Climbing Dome (bottom-right)
+      const domeX = wx + 33.5;
+      const domeY = wy + 34.5;
+      ctx.strokeStyle = '#0EA5E9';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(domeX, domeY, 4.6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = '#F97316';
+      ctx.beginPath();
+      ctx.moveTo(domeX - 4, domeY);
+      ctx.lineTo(domeX + 4, domeY);
+      ctx.moveTo(domeX, domeY - 4);
+      ctx.lineTo(domeX, domeY + 4);
       ctx.stroke();
     } else if (variant === 'garden') {
       // Cozy botanical flower garden + stone path + fountain
@@ -1344,7 +1625,12 @@ function drawBuildingTile(
       ctx.fillRect(wx + 7, wy + 14 + row * 9, TILE_SIZE - 14, 3);
     }
     if (stage > 0) {
-      const sway = Math.sin(wallTimeSeconds * 2.4 + tile.x * 0.8 + tile.y * 0.5) * (0.7 + stage * 0.45);
+      const windMult = sim.weather === 'Windy' ? 2.6 : 1;
+      const sway =
+        Math.sin(wallTimeSeconds * (sim.weather === 'Windy' ? 5.2 : 2.4) + tile.x * 0.8 + tile.y * 0.5) *
+          (0.7 + stage * 0.45) *
+          windMult +
+        (sim.weather === 'Windy' ? 1.2 : 0);
       const height = 2 + stage * 1.8;
       ctx.strokeStyle =
         sim.season === 'Winter'
@@ -1367,6 +1653,16 @@ function drawBuildingTile(
       }
     }
     ctx.restore();
+  }
+
+  // Closed night shutter & badge for Commercial stores outside 06:00 - 22:00
+  if (bld.category === 'commercial' && !sim.isStoreOpen()) {
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.46)';
+    ctx.fillRect(wx + 7, wy + 22, TILE_SIZE - 14, 15);
+    ctx.fillStyle = '#EF4444';
+    ctx.fillRect(wx + 16, wy + 6, 16, 5);
+    ctx.fillStyle = '#FEF2F2';
+    ctx.fillRect(wx + 18, wy + 8, 12, 1.2);
   }
 
   // Subtle emerald cellar hatch badge if building has an underground bunker/basement
@@ -1725,11 +2021,11 @@ function drawNightLighting(
   // 1. Building lit windows + cozy ambient warm glow
   for (let y = minY; y <= maxY; y++) {
     for (let x = minX; x <= maxX; x++) {
-      const tile = sim.tiles[y * GRID_COLS + x];
+      const tile = sim.tiles[y * sim.gridCols + x];
       const wx = x * TILE_SIZE;
       const wy = y * TILE_SIZE;
 
-      if (tile.building) {
+      if (tile.building && (tile.building.category !== 'commercial' || sim.isStoreOpen())) {
         const cached = getOrCreateIconCanvas(tile.building.iconGrid);
         if (cached.hasGlow) {
           ctx.globalAlpha = strength * 0.92;
@@ -1753,7 +2049,7 @@ function drawNightLighting(
 
       // Streetlights at road intersections & every 3rd road tile, plus footbridge lanterns
       if (
-        (tile.hasRoad && ((x + y) % 3 === 0 || isIntersectionTile(sim.tiles, x, y))) ||
+        (tile.hasRoad && ((x + y) % 3 === 0 || isIntersectionTile(sim.tiles, x, y, sim.gridCols, sim.gridRows))) ||
         (tile.terrain === 'water' && tile.hasFootbridge)
       ) {
         const cx = wx + TILE_SIZE / 2;
@@ -2264,6 +2560,26 @@ function drawSnowballs(ctx: CanvasRenderingContext2D, sim: CitySimulation) {
   }
 }
 
+function drawPorchPapers(ctx: CanvasRenderingContext2D, sim: CitySimulation) {
+  if (sim.porchPapers.length === 0) return;
+  ctx.save();
+  for (const pp of sim.porchPapers) {
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.26)';
+    ctx.fillRect(pp.wx - 3, pp.wy + 1.5, 6.2, 3.6);
+    ctx.fillStyle = '#F8FAFC';
+    ctx.fillRect(pp.wx - 3.2, pp.wy - 1.5, 6.4, 3.8);
+    ctx.strokeStyle = '#94A3B8';
+    ctx.lineWidth = 0.6;
+    ctx.strokeRect(pp.wx - 3.2, pp.wy - 1.5, 6.4, 3.8);
+    // Tiny headline & red tie ribbon
+    ctx.fillStyle = '#1E293B';
+    ctx.fillRect(pp.wx - 2.1, pp.wy - 0.5, 4.2, 0.9);
+    ctx.fillStyle = '#DC2626';
+    ctx.fillRect(pp.wx - 0.4, pp.wy - 1.5, 0.9, 3.8);
+  }
+  ctx.restore();
+}
+
 function drawPeople(ctx: CanvasRenderingContext2D, sim: CitySimulation, wallTimeSeconds: number) {
   const isRaining = sim.isRainingOrStorming();
   const sorted = [...sim.people].sort((a, b) => a.wy - b.wy);
@@ -2322,7 +2638,7 @@ function drawPersonSprite(
     return;
   }
 
-  // Floating/paddling Kayaker, Rower, or Swimmer on water
+  // Floating/paddling Kayaker, Canoer, Rower, or Swimmer on water
   if (p.role === 'kayaker' && p.state === 'kayaking') {
     ctx.save();
     ctx.translate(p.wx, p.wy);
@@ -2359,9 +2675,14 @@ function drawPersonSprite(
       return;
     }
 
+    const yaw = p.facingAngle !== undefined ? p.facingAngle : 0;
+    const faceDir = Math.cos(yaw) < 0 ? -1 : 1;
+
     if (act === 'rowing') {
       // Classic wooden rowboat hull with twin side oars & wake rings
       const rowPull = Math.sin(p.animPhase * 0.9) * 0.6;
+      ctx.save();
+      ctx.scale(faceDir, 1);
       ctx.strokeStyle = 'rgba(224, 242, 254, 0.72)';
       ctx.lineWidth = 1.1;
       ctx.beginPath();
@@ -2395,17 +2716,20 @@ function drawPersonSprite(
       ctx.lineTo(-2 + rowPull * 5, 8.6);
       ctx.stroke();
       ctx.restore();
+      ctx.restore();
       return;
     }
 
     const paddleAngle = Math.sin(p.animPhase) * 0.55;
+    ctx.save();
+    ctx.scale(faceDir, 1);
     // Water wake ripples
     ctx.strokeStyle = 'rgba(224, 242, 254, 0.7)';
     ctx.lineWidth = 1.1;
     ctx.beginPath();
     ctx.ellipse(0, 3, 10.5, 4.2, 0, 0, Math.PI * 2);
     ctx.stroke();
-    // Bright kayak hull
+    // Sleek canoe / kayak hull
     ctx.fillStyle = p.shirtColor === '#06B6D4' ? '#F59E0B' : '#06B6D4';
     ctx.beginPath();
     ctx.ellipse(0, 1.5, 9.5, 3.3, 0, 0, Math.PI * 2);
@@ -2414,7 +2738,7 @@ function drawPersonSprite(
     ctx.beginPath();
     ctx.ellipse(0, 1.2, 4, 2, 0, 0, Math.PI * 2);
     ctx.fill();
-    // Seated kayaker torso + head
+    // Seated paddler torso + head
     ctx.fillStyle = p.shirtColor;
     ctx.fillRect(-2.6, -4.5, 5.2, 5.2);
     ctx.fillStyle = '#FDBA74';
@@ -2436,12 +2760,13 @@ function drawPersonSprite(
     ctx.fillRect(7.1, -1.2, 2.4, 2.4);
     ctx.restore();
     ctx.restore();
+    ctx.restore();
     return;
   }
 
   const bob =
-    p.role === 'celebrant'
-      ? Math.abs(Math.sin(p.animPhase)) * 2.3
+    p.role === 'celebrant' || p.state === 'playing_park'
+      ? Math.abs(Math.sin(p.animPhase)) * 2.5
       : p.state === 'walking' ||
         p.state === 'chasing' ||
         p.state === 'returning' ||
@@ -2450,13 +2775,48 @@ function drawPersonSprite(
         p.state === 'invading' ||
         p.state === 'escaping' ||
         p.state === 'delivering' ||
+        p.state === 'delivering_paper' ||
         p.state === 'building' ||
+        p.state === 'building_boat' ||
         p.state === 'field_trip'
       ? Math.abs(Math.sin(p.animPhase)) * 1.8
       : 0;
 
   ctx.save();
   ctx.translate(p.wx, p.wy);
+
+  // Partially built wooden canoe or rowboat hull on shoreline sawhorses while human builds it
+  if (p.role === 'kayaker' && p.state === 'building_boat') {
+    const progress = Math.max(0.15, Math.min(1, 1 - p.holdTimer / 4.6));
+    const isRow = p.waterActivity === 'rowing';
+    // Timber sawhorses
+    ctx.strokeStyle = '#78350F';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(4, 3);
+    ctx.lineTo(6, 0);
+    ctx.lineTo(8, 3);
+    ctx.moveTo(11, 3);
+    ctx.lineTo(13, 0);
+    ctx.lineTo(15, 3);
+    ctx.stroke();
+    // Wooden boat/canoe hull growing as carpenter builds
+    ctx.fillStyle = isRow ? '#92400E' : '#B45309';
+    ctx.beginPath();
+    ctx.ellipse(9.5, 0.2, 7.5 * progress + 2, isRow ? 2.8 : 2.1, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (progress > 0.45) {
+      ctx.fillStyle = isRow ? '#FEF3C7' : '#F59E0B';
+      ctx.beginPath();
+      ctx.ellipse(9.5, -0.1, 4.8 * progress + 1, 1.3, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Tiny construction progress bar above
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+    ctx.fillRect(2, -9.5, 15, 2.6);
+    ctx.fillStyle = '#FACC15';
+    ctx.fillRect(2.5, -9, 14 * progress, 1.6);
+  }
 
   // Beach towel underneath sunbathers
   if (p.role === 'hobbyist' && p.hobbyKind === 'sunbathing' && p.state === 'doing_hobby') {
@@ -2480,8 +2840,44 @@ function drawPersonSprite(
   // Ground shadow
   ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
   ctx.beginPath();
-  ctx.ellipse(0, 3.5, 4.2, 2, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 3.5, p.role === 'paperboy' || p.hasBicycle ? 7.5 : 4.2, 2.2, 0, 0, Math.PI * 2);
   ctx.fill();
+
+  // Bicycle under delivering paperboy
+  if (p.role === 'paperboy' || p.hasBicycle) {
+    const dir = p.targetWx < p.wx - 1 ? -1 : 1;
+    ctx.save();
+    ctx.scale(dir, 1);
+    // Wheels
+    ctx.strokeStyle = '#0F172A';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(-4.5, 2.2, 2.6, 0, Math.PI * 2);
+    ctx.arc(4.8, 2.2, 2.6, 0, Math.PI * 2);
+    ctx.stroke();
+    // Bicycle diamond frame & handlebars
+    ctx.strokeStyle = '#EF4444';
+    ctx.lineWidth = 1.3;
+    ctx.beginPath();
+    ctx.moveTo(-4.5, 2.2);
+    ctx.lineTo(-0.8, -1.6);
+    ctx.lineTo(3.5, -1.6);
+    ctx.lineTo(4.8, 2.2);
+    ctx.moveTo(-0.8, -1.6);
+    ctx.lineTo(0.2, 2.2);
+    ctx.stroke();
+    // Handlebars & front paper basket
+    ctx.strokeStyle = '#CBD5E1';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(3.5, -1.6);
+    ctx.lineTo(3.1, -4.4);
+    ctx.lineTo(4.8, -4.6);
+    ctx.stroke();
+    ctx.fillStyle = '#F8FAFC';
+    ctx.fillRect(3.6, -3.5, 2.8, 2.1);
+    ctx.restore();
+  }
 
   // Ice-skate trail arc & blades for Winter ice skaters
   if (p.role === 'hobbyist' && p.hobbyKind === 'ice_skating' && p.state === 'doing_hobby') {
@@ -2761,8 +3157,12 @@ function drawPersonSprite(
     ctx.fillRect(-3.1, bodyY - 10.3, 6.2, 1.8);
     ctx.fillStyle = '#FACC15';
     ctx.fillRect(0.2, bodyY - 9.8, 3.2, 0.9);
-  } else if (p.role === 'repairer' || p.role === 'builder') {
-    // Yellow engineer / builder hard hat
+  } else if (
+    p.role === 'repairer' ||
+    p.role === 'builder' ||
+    (p.role === 'kayaker' && (p.state === 'building_boat' || (!p.boatBuilt && p.waterActivity !== 'swim')))
+  ) {
+    // Yellow engineer / boat-builder hard hat
     ctx.fillStyle = '#FACC15';
     ctx.beginPath();
     ctx.arc(0, bodyY - 8.3, 3.1, Math.PI, 0);
@@ -3243,8 +3643,29 @@ function drawPersonSprite(
       ctx.beginPath();
       ctx.arc(3.2, bodyY - 2, 2.4, 0, Math.PI * 2);
       ctx.stroke();
+    } else if (p.state === 'building_boat') {
+      // Swinging carpenter hammer at shoreline
+      const swing = Math.sin(p.animPhase) * 0.95;
+      ctx.save();
+      ctx.translate(2.5, bodyY - 3);
+      ctx.rotate(swing);
+      ctx.strokeStyle = '#78350F';
+      ctx.lineWidth = 1.3;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(4.8, -4.8);
+      ctx.stroke();
+      ctx.fillStyle = '#CBD5E1';
+      ctx.fillRect(3.6, -6.5, 3, 2.2);
+      ctx.restore();
+    } else if (!p.boatBuilt) {
+      // Carrying wooden planks to build the canoe/boat at the shore
+      ctx.fillStyle = '#B45309';
+      ctx.fillRect(-4.8, bodyY - 4.2, 3.2, 6.2);
+      ctx.fillStyle = '#D97706';
+      ctx.fillRect(-4.4, bodyY - 3.6, 1.1, 5.2);
     } else {
-      // Carrying kayak paddle or wooden rowing oar upright on shore walk
+      // Carrying kayak/canoe paddle or wooden rowing oar upright on shore walk
       ctx.strokeStyle = '#78350F';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
@@ -3403,6 +3824,20 @@ function drawPersonSprite(
       ctx.fillRect(2.8, bodyY - 3.6, 3.2, 1.2);
       ctx.fillStyle = '#2563EB';
       ctx.fillRect(2.8, bodyY - 4.9, 3.2, 1.2);
+    } else if (p.carryingItem === 'meat') {
+      // Wrapped butcher parcel / fresh steak cut
+      ctx.fillStyle = '#FEF2F2';
+      ctx.fillRect(2.6, bodyY - 3.8, 3.8, 2.8);
+      ctx.fillStyle = '#DC2626';
+      ctx.fillRect(3.1, bodyY - 3.3, 2.8, 1.8);
+      ctx.fillStyle = '#FCA5A5';
+      ctx.fillRect(3.6, bodyY - 2.9, 1.2, 0.8);
+    } else if (p.carryingItem === 'electronics') {
+      // Tech gadget box with neon cyan stripe
+      ctx.fillStyle = '#1E293B';
+      ctx.fillRect(2.6, bodyY - 4.2, 3.6, 3.2);
+      ctx.fillStyle = '#38BDF8';
+      ctx.fillRect(3.0, bodyY - 3.7, 2.8, 1.2);
     } else {
       // Shopping tote bag
       ctx.fillStyle = '#FDE047';
@@ -4134,8 +4569,8 @@ function drawNukeBlasts(ctx: CanvasRenderingContext2D, sim: CitySimulation) {
 }
 
 function drawWeatherEffects(ctx: CanvasRenderingContext2D, sim: CitySimulation) {
-  const mapW = GRID_COLS * TILE_SIZE;
-  const mapH = GRID_ROWS * TILE_SIZE;
+  const mapW = sim.gridCols * TILE_SIZE;
+  const mapH = sim.gridRows * TILE_SIZE;
 
   // Atmospheric weather washes
   if (sim.weather === 'Storm') {
@@ -4148,10 +4583,7 @@ function drawWeatherEffects(ctx: CanvasRenderingContext2D, sim: CitySimulation) 
     ctx.fillStyle = 'rgba(148, 163, 184, 0.15)';
     ctx.fillRect(0, 0, mapW, mapH);
   } else if (sim.weather === 'Foggy') {
-    ctx.fillStyle = 'rgba(226, 232, 240, 0.34)';
-    ctx.fillRect(0, 0, mapW, mapH);
-  } else if (sim.weather === 'Windy') {
-    ctx.fillStyle = 'rgba(186, 230, 253, 0.06)';
+    ctx.fillStyle = 'rgba(226, 232, 240, 0.36)';
     ctx.fillRect(0, 0, mapW, mapH);
   }
 
@@ -4173,25 +4605,6 @@ function drawWeatherEffects(ctx: CanvasRenderingContext2D, sim: CitySimulation) 
       ctx.moveTo(pt.x, pt.y);
       ctx.lineTo(pt.x + pt.vx * 0.032, pt.y + pt.size);
       ctx.stroke();
-    }
-  } else if (sim.weather === 'Windy') {
-    ctx.lineCap = 'round';
-    ctx.lineWidth = 1.2;
-    for (const pt of sim.weatherParticles) {
-      if (pt.color) {
-        ctx.globalAlpha = pt.alpha;
-        ctx.fillStyle = pt.color;
-        ctx.beginPath();
-        ctx.ellipse(pt.x, pt.y, pt.size, pt.size * 0.55, pt.x * 0.04, 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.globalAlpha = pt.alpha;
-        ctx.strokeStyle = 'rgba(241, 245, 249, 0.65)';
-        ctx.beginPath();
-        ctx.moveTo(pt.x, pt.y);
-        ctx.lineTo(pt.x + 14 + pt.size * 2, pt.y + 1.5);
-        ctx.stroke();
-      }
     }
   } else if (sim.weather === 'Foggy') {
     for (const pt of sim.weatherParticles) {
@@ -4301,6 +4714,26 @@ function drawHoverPreview(
 
   if (toolMode === 'select') {
     drawCornerReticle(ctx, wx + 1, wy + 1, TILE_SIZE - 2, 'rgba(248, 250, 252, 0.7)', 1.5);
+    return;
+  }
+
+  if (toolMode === 'land') {
+    if (tile.terrain === 'void') {
+      const canAdd = sim.canPlaceExpansionLandAt(tx, ty);
+      ctx.fillStyle = canAdd ? 'rgba(16, 185, 129, 0.36)' : 'rgba(239, 68, 68, 0.28)';
+      ctx.fillRect(wx, wy, TILE_SIZE, TILE_SIZE);
+      drawCornerReticle(ctx, wx + 1, wy + 1, TILE_SIZE - 2, canAdd ? '#10B981' : '#EF4444', 2);
+      return;
+    }
+    const canRemove = sim.canRemoveExpansionLandAt(tx, ty);
+    ctx.fillStyle = canRemove ? 'rgba(250, 204, 21, 0.32)' : 'rgba(239, 68, 68, 0.28)';
+    ctx.fillRect(wx, wy, TILE_SIZE, TILE_SIZE);
+    drawCornerReticle(ctx, wx + 1, wy + 1, TILE_SIZE - 2, canRemove ? '#FACC15' : '#EF4444', 2);
+    return;
+  }
+
+  if (tile.terrain === 'void') {
+    drawCornerReticle(ctx, wx + 1, wy + 1, TILE_SIZE - 2, '#64748B', 1.5);
     return;
   }
 

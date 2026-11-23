@@ -3,10 +3,12 @@ import { HudOverlay } from './components/HudOverlay';
 import { IconPainterModal } from './components/IconPainterModal';
 import { InspectorPanel } from './components/InspectorPanel';
 import { MapManagerModal } from './components/MapManagerModal';
-import { NewspaperModal } from './components/NewspaperModal';
+import { NewspaperModal, NormalizedCropRect } from './components/NewspaperModal';
 import { PauseModal } from './components/PauseModal';
+import { PermitProposalsModal } from './components/PermitProposalsModal';
+import { PlaceFinderModal } from './components/PlaceFinderModal';
 import { TitleScreen } from './components/TitleScreen';
-import { DEFAULT_BLUEPRINTS, PRESET_MAPS } from './data/defaultBlueprints';
+import { createBiomePreset, DEFAULT_BLUEPRINTS, PRESET_MAPS } from './data/defaultBlueprints';
 import { isHighwayTile, isIntersectionTile } from './engine/pathfinding';
 import { CameraState, HoverState, renderSimulation } from './engine/renderer';
 import { CitySimulation } from './engine/simulation';
@@ -15,9 +17,8 @@ import {
   CityEventType,
   CrisisType,
   GameState,
-  GRID_COLS,
-  GRID_ROWS,
   ICON_SIZE,
+  MapTemplateKind,
   RoadIntersectionConfig,
   SavedMapData,
   SelectionTarget,
@@ -28,6 +29,8 @@ import {
 import { soundEngine } from './utils/sound';
 
 const SAVED_MAPS_STORAGE_KEY = 'cartoville_saved_maps_v1';
+const RUNTIME_MAPS_STORAGE_KEY = 'villesim_runtime_maps_v1';
+const LAST_ACTIVE_MAP_ID_KEY = 'villesim_last_map_id_v1';
 
 function loadSavedMapsFromStorage(): SavedMapData[] {
   try {
@@ -40,16 +43,56 @@ function loadSavedMapsFromStorage(): SavedMapData[] {
   }
 }
 
+function loadRuntimeMapsFromStorage(): Record<string, SavedMapData> {
+  try {
+    const raw = localStorage.getItem(RUNTIME_MAPS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function getLastActiveMapId(): string | null {
+  try {
+    return localStorage.getItem(LAST_ACTIVE_MAP_ID_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeRuntimeMapToStorage(data: SavedMapData): Record<string, SavedMapData> {
+  const all = loadRuntimeMapsFromStorage();
+  all[data.id] = data;
+  try {
+    localStorage.setItem(RUNTIME_MAPS_STORAGE_KEY, JSON.stringify(all));
+    localStorage.setItem(LAST_ACTIVE_MAP_ID_KEY, data.id);
+  } catch {
+    // Ignore storage quota errors
+  }
+  return all;
+}
+
 export default function App() {
+  const initialSavedMaps = loadSavedMapsFromStorage();
+  const initialRuntimeMaps = loadRuntimeMapsFromStorage();
   const simRef = useRef<CitySimulation | null>(null);
   if (!simRef.current) {
-    simRef.current = new CitySimulation(PRESET_MAPS[0]);
+    const lastId = getLastActiveMapId();
+    const initialMap =
+      (lastId && initialRuntimeMaps[lastId]) ||
+      (lastId && initialSavedMaps.find((m) => m.id === lastId)) ||
+      (lastId && PRESET_MAPS.find((m) => m.id === lastId)) ||
+      initialRuntimeMaps[PRESET_MAPS[0].id] ||
+      PRESET_MAPS[0];
+    simRef.current = new CitySimulation(initialMap);
   }
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cameraRef = useRef<CameraState>({
-    x: (GRID_COLS * TILE_SIZE) / 2,
-    y: (GRID_ROWS * TILE_SIZE) / 2,
+    x: (simRef.current.gridCols * TILE_SIZE) / 2,
+    y: (simRef.current.gridRows * TILE_SIZE) / 2,
     zoom: 1,
   });
   const hoverRef = useRef<HoverState>({ tileX: -1, tileY: -1, visible: false });
@@ -60,12 +103,14 @@ export default function App() {
   const lastPaintedTileRef = useRef<string>('');
   const zebraPaintTargetRef = useRef<boolean>(true);
   const footbridgePaintTargetRef = useRef<boolean>(true);
+  const landPaintModeRef = useRef<'add' | 'remove'>('add');
   const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
-  const sessionInitializedRef = useRef<boolean>(false);
+  const sessionInitializedRef = useRef<boolean>(Boolean(simRef.current.dayCount > 1));
+  const lastWallClockMsRef = useRef<number>(Date.now());
 
   const [gameState, setGameState] = useState<GameState>('TITLE_MENU');
-  const [selectedPresetId, setSelectedPresetId] = useState<string>(PRESET_MAPS[0].id);
-  const [savedMaps, setSavedMaps] = useState<SavedMapData[]>(() => loadSavedMapsFromStorage());
+  const [selectedPresetId, setSelectedPresetId] = useState<string>(simRef.current.mapId);
+  const [savedMaps, setSavedMaps] = useState<SavedMapData[]>(initialSavedMaps);
   const [mapName, setMapName] = useState<string>(simRef.current.mapName);
 
   const [isRunning, setIsRunning] = useState<boolean>(true);
@@ -82,6 +127,7 @@ export default function App() {
   const [isUiHidden, setIsUiHidden] = useState<boolean>(false);
   const [isNewspaperOpen, setIsNewspaperOpen] = useState<boolean>(false);
   const [draftNewsPhoto, setDraftNewsPhoto] = useState<string | null>(null);
+  const [draftInitialCrop, setDraftInitialCrop] = useState<NormalizedCropRect | null>(null);
   const [justSaved, setJustSaved] = useState<boolean>(false);
 
   const [selection, setSelection] = useState<SelectionTarget | null>(null);
@@ -89,6 +135,8 @@ export default function App() {
   const [inspectorTick, setInspectorTick] = useState<number>(0);
 
   const [isMapManagerOpen, setIsMapManagerOpen] = useState<boolean>(false);
+  const [isPlaceFinderOpen, setIsPlaceFinderOpen] = useState<boolean>(false);
+  const [isPermitsOpen, setIsPermitsOpen] = useState<boolean>(false);
   const [painterState, setPainterState] = useState<{
     open: boolean;
     mode: 'create_blueprint' | 'edit_blueprint' | 'edit_placed';
@@ -115,14 +163,22 @@ export default function App() {
   const isUiHiddenRef = useRef(isUiHidden);
   isUiHiddenRef.current = isUiHidden;
 
+  const persistCurrentRuntimeMap = useCallback(() => {
+    const sim = simRef.current;
+    if (!sim) return;
+    const exported = sim.exportMapData(sim.mapName);
+    writeRuntimeMapToStorage(exported);
+  }, []);
+
   const fitCameraToViewport = useCallback(() => {
+    const sim = simRef.current!;
     const w = window.innerWidth;
     const h = window.innerHeight;
-    const mapW = GRID_COLS * TILE_SIZE;
-    const mapH = GRID_ROWS * TILE_SIZE;
+    const mapW = sim.gridCols * TILE_SIZE;
+    const mapH = sim.gridRows * TILE_SIZE;
     const zoomX = (w - 80) / mapW;
     const zoomY = (h - 170) / mapH;
-    const zoom = Math.max(0.55, Math.min(1.35, Math.min(zoomX, zoomY)));
+    const zoom = Math.max(0.5, Math.min(1.35, Math.min(zoomX, zoomY)));
     cameraRef.current = {
       x: mapW / 2,
       y: mapH / 2 + 12,
@@ -162,6 +218,19 @@ export default function App() {
       const dt = Math.min(rawDt, 0.05);
       const sim = simRef.current!;
 
+      const wallNowMs = Date.now();
+      const hiddenGapSec = (wallNowMs - lastWallClockMsRef.current) / 1000;
+      lastWallClockMsRef.current = wallNowMs;
+      if (hiddenGapSec > 1.2 && gameStateRef.current !== 'PAUSED' && sim.isRunning) {
+        sim.advanceBackgroundSeconds(hiddenGapSec);
+      }
+
+      const camShift = sim.consumePendingCameraShift();
+      if (camShift) {
+        cameraRef.current.x += camShift.dx;
+        cameraRef.current.y += camShift.dy;
+      }
+
       // Camera continuous WASD/Arrow pan during PLAYING
       if (gameStateRef.current === 'PLAYING') {
         const keys = heldKeysRef.current;
@@ -181,8 +250,8 @@ export default function App() {
       } else if (gameStateRef.current === 'TITLE_MENU') {
         // Gentle atmospheric camera pan across the live running city
         const t = now * 0.00018;
-        const mapW = GRID_COLS * TILE_SIZE;
-        const mapH = GRID_ROWS * TILE_SIZE;
+        const mapW = sim.gridCols * TILE_SIZE;
+        const mapH = sim.gridRows * TILE_SIZE;
         cameraRef.current.x = mapW * 0.54 + Math.sin(t) * 140;
         cameraRef.current.y = mapH * 0.5 + Math.cos(t * 0.8) * 75;
         cameraRef.current.zoom = 1.05;
@@ -235,6 +304,55 @@ export default function App() {
     return () => cancelAnimationFrame(rafId);
   }, []);
 
+  // Background Tab Time Progression + Periodic Auto-Save Per Map
+  useEffect(() => {
+    const tickBackground = () => {
+      const sim = simRef.current;
+      if (!sim) return;
+      const nowMs = Date.now();
+      const elapsedSec = (nowMs - lastWallClockMsRef.current) / 1000;
+      if (document.hidden && sim.isRunning && gameStateRef.current !== 'PAUSED' && elapsedSec > 0.5) {
+        lastWallClockMsRef.current = nowMs;
+        sim.advanceBackgroundSeconds(elapsedSec);
+        setStats(sim.getStats());
+      }
+      if (gameStateRef.current === 'PLAYING') {
+        persistCurrentRuntimeMap();
+      }
+    };
+
+    const intervalId = window.setInterval(tickBackground, 4000);
+    const onVisibility = () => {
+      const sim = simRef.current;
+      if (!sim) return;
+      const nowMs = Date.now();
+      if (document.hidden) {
+        lastWallClockMsRef.current = nowMs;
+        persistCurrentRuntimeMap();
+      } else {
+        const elapsedSec = (nowMs - lastWallClockMsRef.current) / 1000;
+        lastWallClockMsRef.current = nowMs;
+        if (elapsedSec > 0.5 && sim.isRunning && gameStateRef.current !== 'PAUSED') {
+          sim.advanceBackgroundSeconds(elapsedSec);
+          setStats(sim.getStats());
+        }
+      }
+    };
+    const onUnload = () => {
+      persistCurrentRuntimeMap();
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('beforeunload', onUnload);
+    window.addEventListener('pagehide', onUnload);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('beforeunload', onUnload);
+      window.removeEventListener('pagehide', onUnload);
+    };
+  }, [persistCurrentRuntimeMap]);
+
   // Keyboard listeners + blur safety
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -244,11 +362,12 @@ export default function App() {
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT');
       if (isTyping) return;
 
-      if (painterState?.open || isMapManagerOpen || isNewspaperOpen) {
+      if (painterState?.open || isMapManagerOpen || isNewspaperOpen || isPlaceFinderOpen) {
         if (e.key === 'Escape') {
           setPainterState(null);
           setIsMapManagerOpen(false);
           setIsNewspaperOpen(false);
+          setIsPlaceFinderOpen(false);
         }
         return;
       }
@@ -303,6 +422,12 @@ export default function App() {
       } else if (lower === 'b') {
         setToolMode('footbridge');
         soundEngine.playUiTick();
+      } else if (lower === 'l') {
+        setToolMode('land');
+        soundEngine.playUiTick();
+      } else if (lower === 'f') {
+        setIsPlaceFinderOpen(true);
+        soundEngine.playUiTick();
       } else if (lower === 'x') {
         setToolMode('bulldoze');
         soundEngine.playUiTick();
@@ -331,11 +456,12 @@ export default function App() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [painterState, isMapManagerOpen, isNewspaperOpen]);
+  }, [painterState, isMapManagerOpen, isNewspaperOpen, isPlaceFinderOpen]);
 
   const clampCamera = (cam: CameraState) => {
-    const mapW = GRID_COLS * TILE_SIZE;
-    const mapH = GRID_ROWS * TILE_SIZE;
+    const sim = simRef.current!;
+    const mapW = sim.gridCols * TILE_SIZE;
+    const mapH = sim.gridRows * TILE_SIZE;
     cam.x = Math.max(-120, Math.min(mapW + 120, cam.x));
     cam.y = Math.max(-120, Math.min(mapH + 120, cam.y));
   };
@@ -375,29 +501,49 @@ export default function App() {
 
     const canvas = canvasRef.current;
     let dataUrl: string | undefined;
+    let initCrop: NormalizedCropRect = { x: 0.22, y: 0.2, w: 0.56, h: 0.56 };
+
     if (canvas) {
       const rect = canvas.getBoundingClientRect();
-      const dpr = canvas.width / Math.max(1, rect.width);
-      const viewW = 360 * dpr;
-      const viewH = 240 * dpr;
-      const cx = (clientX - rect.left) * dpr;
-      const cy = (clientY - rect.top) * dpr;
-      const sx = Math.max(0, Math.min(canvas.width - viewW, cx - viewW / 2));
-      const sy = Math.max(0, Math.min(canvas.height - viewH, cy - viewH / 2));
-      const sw = Math.min(viewW, canvas.width);
-      const sh = Math.min(viewH, canvas.height);
+      const vw = Math.max(320, Math.round(rect.width || window.innerWidth));
+      const vh = Math.max(240, Math.round(rect.height || window.innerHeight));
+      const scale = Math.min(2, window.devicePixelRatio || 1.5);
 
-      const out = document.createElement('canvas');
-      out.width = 360;
-      out.height = 240;
-      const oCtx = out.getContext('2d');
-      if (oCtx) {
-        oCtx.drawImage(canvas, sx, sy, sw, sh, 0, 0, 360, 240);
-        dataUrl = out.toDataURL('image/jpeg', 0.85);
+      const snap = document.createElement('canvas');
+      snap.width = Math.round(vw * scale);
+      snap.height = Math.round(vh * scale);
+      const sCtx = snap.getContext('2d');
+      if (sCtx) {
+        sCtx.save();
+        sCtx.scale(scale, scale);
+        renderSimulation(sCtx, vw, vh, sim, {
+          camera: cameraRef.current,
+          hover: { tileX: -1, tileY: -1, visible: false },
+          selection: null,
+          toolMode: 'pan',
+          activeBlueprint: activeBlueprintRef.current,
+          showTrafficOverlay: showTrafficRef.current,
+          showGrid: showGridRef.current,
+          wallTimeSeconds: performance.now() / 1000,
+        });
+        sCtx.restore();
+        dataUrl = snap.toDataURL('image/png');
       }
+
+      const cropW = Math.min(0.88, Math.max(0.24, (360 * cameraRef.current.zoom) / vw));
+      const cropH = Math.min(0.88, Math.max(0.24, (240 * cameraRef.current.zoom) / vh));
+      const relX = (clientX - rect.left) / vw;
+      const relY = (clientY - rect.top) / vh;
+      initCrop = {
+        x: Math.max(0, Math.min(1 - cropW, relX - cropW / 2)),
+        y: Math.max(0, Math.min(1 - cropH, relY - cropH / 2)),
+        w: cropW,
+        h: cropH,
+      };
     }
 
     soundEngine.playCameraShutter();
+    setDraftInitialCrop(initCrop);
     setDraftNewsPhoto(dataUrl || null);
     setToolMode('pan');
     setIsNewspaperOpen(true);
@@ -414,6 +560,35 @@ export default function App() {
 
     const mode = toolModeRef.current;
 
+    if (mode === 'land') {
+      if (isClickStart) {
+        landPaintModeRef.current = tile.terrain === 'void' ? 'add' : 'remove';
+      }
+      if (sim.applyExpansionLand(tx, ty, landPaintModeRef.current)) {
+        if (landPaintModeRef.current === 'add') {
+          soundEngine.playPlaceBuilding();
+        } else {
+          soundEngine.playBulldoze();
+          if (selectionRef.current?.x === tx && selectionRef.current?.y === ty) {
+            setSelection(null);
+          }
+        }
+        setStats(sim.getStats());
+      } else if (isClickStart && tile.terrain !== 'void' && tile.isDefaultLand) {
+        sim.floatingLabels.push({
+          wx: (tx + 0.5) * TILE_SIZE,
+          wy: (ty + 0.35) * TILE_SIZE,
+          text: 'Original Land Locked',
+          color: '#FEF2F2',
+          bgColor: '#991B1B',
+          age: 0,
+          maxAge: 1.5,
+        });
+        soundEngine.playBulldoze();
+      }
+      return;
+    }
+
     if (mode === 'select') {
       if (!isClickStart) return;
       if (tile.building) {
@@ -422,7 +597,12 @@ export default function App() {
       } else if (tile.hasRoad) {
         setSelection({ type: 'intersection', x: tx, y: ty });
         soundEngine.playUiTick();
-      } else if ((tile.terrain === 'water' && tile.hasFootbridge) || sim.getMarketStallAt(tx, ty)) {
+      } else if (
+        (tile.terrain === 'water' && tile.hasFootbridge) ||
+        sim.getMarketStallAt(tx, ty) ||
+        sim.getProposalAt(tx, ty) ||
+        sim.getConstructionAt(tx, ty)
+      ) {
         setSelection({ type: 'tile', x: tx, y: ty });
         soundEngine.playUiTick();
       } else {
@@ -641,19 +821,51 @@ export default function App() {
     zoomByFactor(zoomFactor, e.clientX, e.clientY);
   };
 
-  const handleLoadMap = (map: SavedMapData) => {
+  const handleLoadMap = (map: SavedMapData, preferRuntime = true) => {
+    persistCurrentRuntimeMap();
     const sim = simRef.current!;
-    sim.loadMap(map);
-    sessionInitializedRef.current = false;
-    setSelectedPresetId(map.id);
-    setMapName(map.name);
+    const runtimeMaps = loadRuntimeMapsFromStorage();
+    const target = preferRuntime && runtimeMaps[map.id] ? runtimeMaps[map.id] : map;
+    sim.loadMap(target);
+    try {
+      localStorage.setItem(LAST_ACTIVE_MAP_ID_KEY, target.id);
+    } catch {
+      // Ignore storage quota errors
+    }
+    sessionInitializedRef.current = Boolean(target.simState);
+    setSelectedPresetId(target.id);
+    setMapName(target.name);
     setBlueprints(sim.getAllBlueprints());
     setSelection(null);
     setDraftNewsPhoto(null);
+    setDraftInitialCrop(null);
     setStats(sim.getStats());
-    if (gameState === 'PLAYING') {
-      fitCameraToViewport();
+    fitCameraToViewport();
+  };
+
+  const handleCreateBiomeMap = (template: MapTemplateKind, customName?: string, startImmediately = false) => {
+    persistCurrentRuntimeMap();
+    const created = createBiomePreset(template, customName);
+    const sim = simRef.current!;
+    sim.loadMap(created);
+    sessionInitializedRef.current = false;
+    setSelectedPresetId(created.id);
+    setMapName(created.name);
+    setBlueprints(sim.getAllBlueprints());
+    setSelection(null);
+    setDraftNewsPhoto(null);
+    setDraftInitialCrop(null);
+    setStats(sim.getStats());
+    persistCurrentRuntimeMap();
+    if (startImmediately) {
+      sim.prepareForPlaySession();
+      sessionInitializedRef.current = true;
+      sim.isRunning = true;
+      setGameState('PLAYING');
+      setToolMode('pan');
+      setIsRunning(true);
     }
+    fitCameraToViewport();
   };
 
   const handleSaveMap = (name: string) => {
@@ -664,6 +876,7 @@ export default function App() {
     sim.mapId = id;
     const exported = sim.exportMapData(name);
     exported.id = id;
+    writeRuntimeMapToStorage(exported);
 
     setSavedMaps((prev) => {
       const next = [exported, ...prev];
@@ -684,6 +897,7 @@ export default function App() {
     sim.mapId = currentId;
     const exported = sim.exportMapData(sim.mapName);
     exported.id = currentId;
+    writeRuntimeMapToStorage(exported);
 
     setSavedMaps((prev) => {
       const idx = prev.findIndex((m) => m.id === currentId);
@@ -730,6 +944,7 @@ export default function App() {
     setToolMode('pan');
     setIsRunning(true);
     fitCameraToViewport();
+    persistCurrentRuntimeMap();
   };
 
   const openCreateBlueprintPainter = () => {
@@ -806,7 +1021,13 @@ export default function App() {
 
   const selectedIsIntersection =
     selectedTile && selectedTile.hasRoad
-      ? isIntersectionTile(simRef.current.tiles, selectedTile.x, selectedTile.y)
+      ? isIntersectionTile(
+          simRef.current.tiles,
+          selectedTile.x,
+          selectedTile.y,
+          simRef.current.gridCols,
+          simRef.current.gridRows
+        )
       : false;
 
   const selectedIsHighway =
@@ -846,7 +1067,8 @@ export default function App() {
         <TitleScreen
           selectedPresetId={selectedPresetId}
           savedMaps={savedMaps}
-          onSelectMap={handleLoadMap}
+          onSelectMap={(map) => handleLoadMap(map, true)}
+          onCreateBiomeMap={(tpl) => handleCreateBiomeMap(tpl, undefined, false)}
           onStartGame={handleStartGame}
         />
       )}
@@ -921,6 +1143,20 @@ export default function App() {
             simRef.current!.markNewsRead();
             setStats(simRef.current!.getStats());
             setIsNewspaperOpen(true);
+          }}
+          onOpenPermits={() => {
+            soundEngine.playUiTick();
+            setIsPermitsOpen(true);
+          }}
+          onOpenPlaceFinder={() => {
+            soundEngine.playUiTick();
+            setIsPlaceFinderOpen(true);
+          }}
+          onRefreshSimulation={() => {
+            simRef.current!.refreshSimulationPerformance();
+            lastWallClockMsRef.current = Date.now();
+            setStats(simRef.current!.getStats());
+            soundEngine.playSaveIcon();
           }}
           onToggleMute={() => {
             const next = !isMuted;
@@ -1030,6 +1266,9 @@ export default function App() {
             fire={simRef.current.getFireAt(selectedTile.x, selectedTile.y)}
             crash={simRef.current.getCrashAt(selectedTile.x, selectedTile.y)}
             stall={simRef.current.getMarketStallAt(selectedTile.x, selectedTile.y)}
+            proposal={simRef.current.getProposalAt(selectedTile.x, selectedTile.y)}
+            construction={simRef.current.getConstructionAt(selectedTile.x, selectedTile.y)}
+            pendingProposalsCount={stats.pendingProposalsCount}
             crises={simRef.current.crises}
             cratersCount={simRef.current.blastCraters.length}
             economyScore={stats.economyScore}
@@ -1106,6 +1345,24 @@ export default function App() {
                 setSelection(null);
               }
             }}
+            onOpenPermits={() => {
+              soundEngine.playUiTick();
+              setIsPermitsOpen(true);
+            }}
+            onApproveProposal={(id) => {
+              if (simRef.current!.approveProposal(id)) {
+                soundEngine.playPlaceBuilding();
+                setStats(simRef.current!.getStats());
+                setInspectorTick((t) => t + 1);
+              }
+            }}
+            onDeclineProposal={(id) => {
+              if (simRef.current!.declineProposal(id)) {
+                soundEngine.playBulldoze();
+                setStats(simRef.current!.getStats());
+                setSelection(null);
+              }
+            }}
           />
         </div>
       )}
@@ -1129,7 +1386,8 @@ export default function App() {
         savedMaps={savedMaps}
         onClose={() => setIsMapManagerOpen(false)}
         onSaveMap={handleSaveMap}
-        onLoadMap={handleLoadMap}
+        onLoadMap={(map) => handleLoadMap(map, true)}
+        onCreateBiomeMap={(tpl, name) => handleCreateBiomeMap(tpl, name, true)}
         onDeleteSavedMap={handleDeleteSavedMap}
       />
 
@@ -1144,6 +1402,7 @@ export default function App() {
         weather={stats.weather}
         canPublishToday={simRef.current.canPublishTodayPhotoNews()}
         draftPhotoDataUrl={draftNewsPhoto}
+        draftInitialCrop={draftInitialCrop}
         dailyHints={simRef.current.getDailyNewsHints()}
         onTakePhoto={() => {
           setIsNewspaperOpen(false);
@@ -1153,14 +1412,118 @@ export default function App() {
         onPublish={(headlineText, summaryText, photoDataUrl) => {
           simRef.current!.publishUserNewspaper(headlineText, summaryText, photoDataUrl);
           setDraftNewsPhoto(null);
+          setDraftInitialCrop(null);
           setStats(simRef.current!.getStats());
+          persistCurrentRuntimeMap();
           soundEngine.playSaveIcon();
         }}
-        onClearDraft={() => setDraftNewsPhoto(null)}
+        onClearDraft={() => {
+          setDraftNewsPhoto(null);
+          setDraftInitialCrop(null);
+        }}
         onClose={() => {
           setIsNewspaperOpen(false);
           setDraftNewsPhoto(null);
+          setDraftInitialCrop(null);
         }}
+      />
+
+      {/* Find Places Modal */}
+      <PlaceFinderModal
+        isOpen={isPlaceFinderOpen}
+        mapName={mapName}
+        buildings={simRef.current.getBuildings()}
+        neighbourhoods={simRef.current.neighbourhoods}
+        alerts={[
+          ...simRef.current.robberies
+            .filter((r) => r.status === 'active')
+            .map((r) => ({
+              id: r.id,
+              label: `Robbery at ${r.buildingName}`,
+              sublabel: r.neighbourhoodName,
+              x: r.x,
+              y: r.y,
+              badgeColor: '#F43F5E',
+              selectType: 'building' as const,
+            })),
+          ...simRef.current.fires
+            .filter((f) => f.status === 'active')
+            .map((f) => ({
+              id: f.id,
+              label: `Fire at ${f.buildingName}`,
+              sublabel: f.byArsonist ? 'Arson fire active' : 'Firefighters dispatched',
+              x: f.x,
+              y: f.y,
+              badgeColor: '#FB923C',
+              selectType: 'building' as const,
+            })),
+          ...simRef.current.crashes
+            .filter((c) => c.status === 'active')
+            .map((c) => ({
+              id: c.id,
+              label: 'Traffic Crash',
+              sublabel: 'Emergency responders en route',
+              x: c.x,
+              y: c.y,
+              badgeColor: '#FACC15',
+              selectType: 'intersection' as const,
+            })),
+          ...simRef.current.protests
+            .filter((p) => p.status === 'active')
+            .map((p) => ({
+              id: p.id,
+              label: `Protest at ${p.cityHallName}`,
+              sublabel: p.reason,
+              x: p.x,
+              y: p.y,
+              badgeColor: '#A78BFA',
+              selectType: 'building' as const,
+            })),
+        ]}
+        onLocate={(x, y, selectType) => {
+          cameraRef.current.x = (x + 0.5) * TILE_SIZE;
+          cameraRef.current.y = (y + 0.5) * TILE_SIZE;
+          cameraRef.current.zoom = Math.max(cameraRef.current.zoom, 1.25);
+          clampCamera(cameraRef.current);
+          if (selectType) {
+            setSelection({ type: selectType, x, y });
+          } else {
+            setSelection(null);
+          }
+          soundEngine.playUiTick();
+        }}
+        onClose={() => setIsPlaceFinderOpen(false)}
+      />
+
+      {/* Mayor's Citizen Construction Permit File Modal */}
+      <PermitProposalsModal
+        isOpen={isPermitsOpen}
+        mapName={mapName}
+        proposals={simRef.current.pendingProposals}
+        constructions={simRef.current.activeConstructions}
+        onApprove={(id) => {
+          if (simRef.current!.approveProposal(id)) {
+            soundEngine.playPlaceBuilding();
+            setStats(simRef.current!.getStats());
+            setInspectorTick((t) => t + 1);
+          }
+        }}
+        onDecline={(id) => {
+          if (simRef.current!.declineProposal(id)) {
+            soundEngine.playBulldoze();
+            setStats(simRef.current!.getStats());
+            setInspectorTick((t) => t + 1);
+          }
+        }}
+        onLocate={(x, y) => {
+          cameraRef.current.x = (x + 0.5) * TILE_SIZE;
+          cameraRef.current.y = (y + 0.5) * TILE_SIZE;
+          cameraRef.current.zoom = Math.max(cameraRef.current.zoom, 1.3);
+          clampCamera(cameraRef.current);
+          setSelection({ type: 'tile', x, y });
+          soundEngine.playUiTick();
+        }}
+        onClose={() => setIsPermitsOpen(false)}
       />
 
       {/* Pause Modal */}
@@ -1179,6 +1542,7 @@ export default function App() {
         }}
         onReturnToTitle={() => {
           soundEngine.playUiTick();
+          persistCurrentRuntimeMap();
           setSelection(null);
           setGameState('TITLE_MENU');
         }}

@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Activity,
-  Camera,
   Check,
   Cloud,
   CloudFog,
@@ -11,11 +10,14 @@ import {
   Eraser,
   Eye,
   EyeOff,
+  FileText,
   FolderOpen,
   Frown,
   GripVertical,
   Hand,
   Leaf,
+  MapPin,
+  Maximize2,
   Meh,
   Menu,
   Moon,
@@ -26,6 +28,7 @@ import {
   Pause,
   Play,
   Plus,
+  RefreshCw,
   Route,
   Save,
   Smile,
@@ -78,6 +81,9 @@ interface HudOverlayProps {
   onOpenMaps: () => void;
   onSaveChanges: () => void;
   onOpenNewspaper: () => void;
+  onOpenPermits: () => void;
+  onOpenPlaceFinder: () => void;
+  onRefreshSimulation: () => void;
   onToggleMute: () => void;
   onToggleMusic: () => void;
   onOpenPause: () => void;
@@ -148,6 +154,9 @@ export function HudOverlay({
   onOpenMaps,
   onSaveChanges,
   onOpenNewspaper,
+  onOpenPermits,
+  onOpenPlaceFinder,
+  onRefreshSimulation,
   onToggleMute,
   onToggleMusic,
   onOpenPause,
@@ -824,6 +833,42 @@ export function HudOverlay({
             </button>
             <button
               type="button"
+              onClick={onOpenPermits}
+              title="Mayor's Permit File — Allow or decline citizen construction proposals"
+              className={`relative flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                stats.pendingProposalsCount > 0
+                  ? 'bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/60 text-amber-200'
+                  : 'bg-slate-800 hover:bg-slate-700 text-amber-200'
+              }`}
+            >
+              <FileText className="w-3.5 h-3.5 text-amber-300" />
+              <span className="hidden sm:inline">Permits</span>
+              {stats.pendingProposalsCount > 0 && (
+                <span className="ml-0.5 px-1 py-0 rounded bg-amber-400 text-slate-950 font-mono-tabular text-[10px] font-bold leading-tight">
+                  {stats.pendingProposalsCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={onOpenPlaceFinder}
+              title="Find Places — Search buildings, stores, schools & alerts (F)"
+              className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-sky-300 transition-colors whitespace-nowrap shrink-0"
+            >
+              <MapPin className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Map</span>
+            </button>
+            <button
+              type="button"
+              onClick={onRefreshSimulation}
+              title="Refresh & Smooth Simulation — Clears laggy clutter without restarting your city"
+              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-300 transition-colors shrink-0"
+              aria-label="Refresh simulation"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
               onClick={onSaveChanges}
               title="Save city map changes to browser storage"
               className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
@@ -946,26 +991,6 @@ export function HudOverlay({
             </button>
             <button
               type="button"
-              onClick={() => onSelectTool('camera')}
-              title={
-                stats.hasTodayPhotoNews
-                  ? 'Daily news photo already taken today — check tomorrow!'
-                  : 'Take Daily News Photo (C) — Snap town scene & write news'
-              }
-              className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                toolMode === 'camera'
-                  ? 'bg-amber-400 text-slate-950 font-semibold'
-                  : stats.hasTodayPhotoNews
-                  ? 'text-slate-400 hover:bg-slate-800'
-                  : 'text-amber-300 hover:bg-slate-800'
-              }`}
-            >
-              <Camera className="w-4 h-4" />
-              <span>Photo</span>
-              {stats.hasTodayPhotoNews && <Check className="w-3 h-3 text-emerald-400" />}
-            </button>
-            <button
-              type="button"
               onClick={() => onSelectTool('road')}
               title="Build Roads & Bridges (R) — Click & drag"
               className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
@@ -1047,6 +1072,32 @@ export function HudOverlay({
               }`}
             >
               <Trees className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectTool('land')}
+              title={`Expand / Move Custom Land (L) — ${stats.expansionCredits} boxes available (unlocks 100 boxes every 10 days)`}
+              className={`flex items-center gap-1 px-2 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                toolMode === 'land'
+                  ? 'bg-emerald-400 text-slate-950 font-semibold'
+                  : stats.expansionCredits > 0
+                  ? 'text-emerald-300 hover:bg-slate-800'
+                  : 'text-slate-400 hover:bg-slate-800'
+              }`}
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+              <span>Land</span>
+              <span
+                className={`font-mono-tabular text-[10px] px-1 rounded ${
+                  toolMode === 'land'
+                    ? 'bg-slate-950/20 text-slate-950'
+                    : stats.expansionCredits > 0
+                    ? 'bg-emerald-500/20 text-emerald-300'
+                    : 'bg-slate-800 text-slate-400'
+                }`}
+              >
+                {stats.expansionCredits}
+              </span>
             </button>
             <button
               type="button"

@@ -3,6 +3,7 @@ import {
   GRID_COLS,
   GRID_ROWS,
   ICON_SIZE,
+  MapTemplateKind,
   PlacedBuilding,
   SavedMapData,
   TerrainType,
@@ -679,6 +680,43 @@ const CROPS_ART = parseArt(
   }
 );
 
+const ELECTRONICS_SHOP_ART = parseArt(
+  [
+    '....................',
+    '......AA....AA......',
+    '.......AA..AA.......',
+    '........AAAA........',
+    '...RRRRRRRRRRRRRR...',
+    '..RRRRRRRRRRRRRRRR..',
+    '..CCCCCCCCCCCCCCCC..',
+    '..CCNNNNNNNNNNNNCC..',
+    '..CCNYNYNNNNNYNYCC..',
+    '..CCCCCCCCCCCCCCCC..',
+    '..WWBBBBBBBBBBBBWW..',
+    '..WWBNNBBDDDBNNBWW..',
+    '..WWBNNBBDDDBNNBWW..',
+    '..WWBBBBBBBBBBBBWW..',
+    '..WWYYBBDDDDDBYYWW..',
+    '..WWYYBBDDDDDBYYWW..',
+    '..LLLLLLLLLLLLLLLL..',
+    '....................',
+    '....................',
+    '....................',
+  ],
+  {
+    '.': '',
+    A: '#94A3B8',
+    R: '#1E293B',
+    C: '#0284C7',
+    N: '#38BDF8',
+    Y: '#FDE047',
+    W: '#E2E8F0',
+    B: '#0F172A',
+    D: '#7DD3FC',
+    L: '#64748B',
+  }
+);
+
 export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
   {
     id: 'house',
@@ -686,7 +724,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'residential',
     iconGrid: HOUSE_ART,
     accentColor: '#C2410C',
-    capacity: 12,
+    capacity: 5,
   },
   {
     id: 'city_hall',
@@ -694,7 +732,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'city_hall',
     iconGrid: CITY_HALL_ART,
     accentColor: '#7C3AED',
-    capacity: 32,
+    capacity: 35,
   },
   {
     id: 'school',
@@ -702,7 +740,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'school',
     iconGrid: SCHOOL_ART,
     accentColor: '#D97706',
-    capacity: 45,
+    capacity: 100,
   },
   {
     id: 'hospital',
@@ -710,7 +748,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'hospital',
     iconGrid: HOSPITAL_ART,
     accentColor: '#DC2626',
-    capacity: 40,
+    capacity: 45,
   },
   {
     id: 'police',
@@ -750,7 +788,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'workplace',
     iconGrid: OFFICE_ART,
     accentColor: '#0284C7',
-    capacity: 38,
+    capacity: 40,
   },
   {
     id: 'factory',
@@ -758,7 +796,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'factory',
     iconGrid: FACTORY_ART,
     accentColor: '#D97706',
-    capacity: 42,
+    capacity: 45,
   },
   {
     id: 'crops',
@@ -766,7 +804,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'crops',
     iconGrid: CROPS_ART,
     accentColor: '#CA8A04',
-    capacity: 22,
+    capacity: 12,
   },
   {
     id: 'market',
@@ -774,7 +812,7 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     category: 'commercial',
     iconGrid: MARKET_ART,
     accentColor: '#EA580C',
-    capacity: 28,
+    capacity: 25,
   },
   {
     id: 'bakery',
@@ -817,12 +855,20 @@ export const DEFAULT_BLUEPRINTS: BuildingBlueprint[] = [
     capacity: 14,
   },
   {
+    id: 'electronics_shop',
+    name: 'Electronics Shop',
+    category: 'commercial',
+    iconGrid: ELECTRONICS_SHOP_ART,
+    accentColor: '#0284C7',
+    capacity: 18,
+  },
+  {
     id: 'park',
     name: 'City Park',
     category: 'park',
     iconGrid: PARK_ART,
     accentColor: '#16A34A',
-    capacity: 18,
+    capacity: 24,
   },
 ];
 
@@ -875,6 +921,7 @@ function createEmptyTiles(): SavedMapData['tiles'] {
         x,
         y,
         terrain: 'grass',
+        isDefaultLand: true,
         hasRoad: false,
         building: null,
       });
@@ -1169,13 +1216,317 @@ function buildTwinBridgesPreset(): SavedMapData {
   };
 }
 
-function buildBlankPreset(): SavedMapData {
+function buildHarborMetroPreset(): SavedMapData {
   const tiles = createEmptyTiles();
+  const idx = (x: number, y: number) => y * GRID_COLS + x;
+
+  // Scenic southern harbor bay + sandy shoreline
+  for (let y = 17; y < GRID_ROWS; y++) {
+    for (let x = 0; x < GRID_COLS; x++) {
+      const cove = Math.sin(x * 0.28) * 1.1;
+      if (y + cove >= 18.2) {
+        tiles[idx(x, y)].terrain = 'water';
+      } else if (y + cove >= 17.0) {
+        tiles[idx(x, y)].terrain = 'sand';
+      }
+    }
+  }
+
+  // Harbor forest groves on the northwest & northeast hills
+  const forestSpots: [number, number][] = [
+    [1, 1], [2, 1], [3, 1], [1, 2], [2, 2], [3, 2], [2, 3],
+    [30, 1], [31, 1], [32, 1], [30, 2], [31, 2], [32, 2], [31, 3],
+    [15, 2], [16, 2], [17, 2], [18, 2],
+    [2, 14], [3, 14], [30, 14], [31, 14],
+  ];
+  for (const [fx, fy] of forestSpots) {
+    if (tiles[idx(fx, fy)].terrain === 'grass') {
+      tiles[idx(fx, fy)].terrain = 'forest';
+    }
+  }
+
+  const setRoad = (x: number, y: number, offset = 0) => {
+    const t = tiles[idx(x, y)];
+    if (t.terrain === 'forest') t.terrain = 'grass';
+    t.hasRoad = true;
+    t.intersection = { controlType: 'signal', cycleDuration: 18, phaseOffset: offset };
+  };
+
+  // Two main east-west boulevards & coastal promenade
+  for (let x = 4; x <= 29; x++) {
+    setRoad(x, 5, 0);
+    setRoad(x, 10, 6);
+    setRoad(x, 15, 11);
+  }
+  // North-south avenues creating neat city blocks
+  for (let y = 5; y <= 15; y++) {
+    setRoad(4, y, 2);
+    setRoad(10, y, 5);
+    setRoad(16, y, 8);
+    setRoad(22, y, 4);
+    setRoad(29, y, 10);
+  }
+
+  const place = (bpId: string, x: number, y: number, name?: string) => {
+    const t = tiles[idx(x, y)];
+    if (!t.hasRoad && t.terrain !== 'water') {
+      if (t.terrain === 'forest') t.terrain = 'grass';
+      t.building = makeBuilding(bpId, x, y, name);
+    }
+  };
+
+  // Residential Bayside & Hilltop Neighborhoods
+  const homes: [number, number][] = [
+    [5, 6], [6, 6], [7, 6], [8, 6], [9, 6],
+    [5, 8], [6, 8], [8, 8], [9, 8],
+    [5, 11], [6, 11], [7, 11], [9, 11],
+    [5, 13], [6, 13], [8, 13],
+    [24, 12], [25, 12], [26, 12], [27, 12],
+    [24, 14], [25, 14], [27, 14],
+  ];
+  homes.forEach(([hx, hy], i) => place('house', hx, hy, `Harbor Home #${i + 1}`));
+
+  // Schools, Parks & Civic District
+  place('school', 12, 7, 'Harbor Elementary');
+  place('park', 13, 7, 'Bayside Playground');
+  place('city_hall', 18, 7, 'Harbor City Hall');
+  place('park', 19, 7, 'Civic Commons');
+  place('hospital', 12, 12, 'Harbor General Hospital');
+  place('police', 14, 12, 'Harbor Police HQ');
+  place('jail', 15, 12, 'Harbor Detention');
+  place('fire_station', 11, 8, 'Pier Firehouse');
+  place('cemetery', 2, 10, 'Hillside Memorial');
+  place('school', 26, 7, 'Metro High School');
+
+  // Commercial Downtown & Job District
+  place('office', 18, 6, 'Bayfront Tower');
+  place('office', 20, 6, 'Commerce Plaza');
+  place('office', 24, 6, 'Oceanic Tech');
+  place('office', 25, 6, 'Portside Trade');
+  place('factory', 28, 7, 'Harbor Cannery');
+  place('crops', 7, 13, 'Sunvale Crops');
+  place('market', 18, 11, 'Harbor Grand Market');
+  place('bakery', 20, 11, 'Sea Breeze Bakery');
+  place('cafe', 19, 13, 'Boardwalk Cafe');
+  place('bookshop', 21, 13, 'Lighthouse Books');
+  place('flower_shop', 17, 13, 'Coral Florist');
+  place('tackle_shop', 14, 16, 'Harbor Bait & Tackle');
+
+  // Zebra crossings & coastal footbridge
+  const crossings: [number, number][] = [
+    [12, 5], [18, 5], [12, 10], [18, 10], [7, 10], [26, 5], [14, 15], [20, 15],
+  ];
+  for (const [cx, cy] of crossings) {
+    const t = tiles[idx(cx, cy)];
+    if (t.hasRoad) t.hasZebraCrossing = true;
+  }
+
+  for (let x = 16; x <= 20; x++) {
+    const t = tiles[idx(x, 19)];
+    if (t && t.terrain === 'water' && !t.hasRoad) {
+      t.hasFootbridge = true;
+    }
+  }
+
   return {
-    id: 'preset_blank',
-    name: 'Blank Valley',
-    subtitle: 'Open grassy terrain ready for your custom roads & icons',
+    id: 'preset_harbor_metro',
+    name: 'Harbor Metro',
+    subtitle: 'Coastal city with bayfront promenade, downtown shops & districts',
     updatedAt: Date.now(),
+    tiles,
+    customBlueprints: [],
+  };
+}
+
+export const BIOME_TEMPLATES: {
+  id: MapTemplateKind;
+  name: string;
+  description: string;
+  accent: string;
+}[] = [
+  {
+    id: 'valley',
+    name: 'Grass Valley',
+    description: 'Open green countryside with light tree groves',
+    accent: '#22C55E',
+  },
+  {
+    id: 'island',
+    name: 'Sandy Island',
+    description: 'Lush island ringed by golden beaches & ocean water',
+    accent: '#F59E0B',
+  },
+  {
+    id: 'archipelago',
+    name: 'Isolated Islands',
+    description: 'Cluster of sunny sandy islands connected by bridges',
+    accent: '#0EA5E9',
+  },
+  {
+    id: 'jungle',
+    name: 'Dense Jungle',
+    description: 'Thick forest canopy clumps teeming with wildlife',
+    accent: '#15803D',
+  },
+  {
+    id: 'river',
+    name: 'Central River',
+    description: 'Twin grassy banks divided by a winding blue river',
+    accent: '#0284C7',
+  },
+  {
+    id: 'pond',
+    name: 'Pond Meadow',
+    description: 'Scenic meadow centered around a peaceful freshwater pond',
+    accent: '#10B981',
+  },
+];
+
+export function createBiomePreset(template: MapTemplateKind, customName?: string): SavedMapData {
+  const tiles = createEmptyTiles();
+  const idx = (x: number, y: number) => y * GRID_COLS + x;
+  const cx = (GRID_COLS - 1) / 2;
+  const cy = (GRID_ROWS - 1) / 2;
+
+  const noise = (x: number, y: number) => {
+    const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+    return n - Math.floor(n);
+  };
+
+  let defaultName = 'Grass Valley';
+  let subtitle = 'Custom blank grass valley ready to build';
+
+  if (template === 'valley') {
+    defaultName = 'Grass Valley';
+    subtitle = 'Open green terrain with gentle tree groves';
+    for (let y = 0; y < GRID_ROWS; y++) {
+      for (let x = 0; x < GRID_COLS; x++) {
+        if (noise(x * 0.7, y * 0.7) > 0.88 && (x < 6 || x > GRID_COLS - 7 || y < 4 || y > GRID_ROWS - 5)) {
+          tiles[idx(x, y)].terrain = 'forest';
+        }
+      }
+    }
+  } else if (template === 'island') {
+    defaultName = 'Coral Island';
+    subtitle = 'Sandy-shored tropical island surrounded by deep sea';
+    for (let y = 0; y < GRID_ROWS; y++) {
+      for (let x = 0; x < GRID_COLS; x++) {
+        const nx = (x - cx) / (GRID_COLS * 0.36);
+        const ny = (y - cy) / (GRID_ROWS * 0.36);
+        const wobble = Math.sin(x * 0.45) * 0.08 + Math.cos(y * 0.55) * 0.08;
+        const dist = Math.hypot(nx, ny) + wobble;
+        if (dist > 1.02) {
+          tiles[idx(x, y)].terrain = 'water';
+        } else if (dist > 0.84) {
+          tiles[idx(x, y)].terrain = 'sand';
+        } else if (dist < 0.45 && noise(x, y) > 0.78) {
+          tiles[idx(x, y)].terrain = 'forest';
+        } else {
+          tiles[idx(x, y)].terrain = 'grass';
+        }
+      }
+    }
+  } else if (template === 'archipelago') {
+    defaultName = 'Sunlit Archipelago';
+    subtitle = 'Lots of isolated sandy islands separated by ocean channels';
+    const isles = [
+      { ix: 7, iy: 6, r: 4.5 },
+      { ix: 17, iy: 5, r: 3.8 },
+      { ix: 26, iy: 7, r: 4.6 },
+      { ix: 8, iy: 15, r: 4.4 },
+      { ix: 18, iy: 15, r: 4.8 },
+      { ix: 27, iy: 16, r: 3.9 },
+    ];
+    for (let y = 0; y < GRID_ROWS; y++) {
+      for (let x = 0; x < GRID_COLS; x++) {
+        let bestRatio = 99;
+        for (const isle of isles) {
+          const ratio = Math.hypot((x - isle.ix) / isle.r, (y - isle.iy) / (isle.r * 0.85));
+          if (ratio < bestRatio) bestRatio = ratio;
+        }
+        if (bestRatio > 1.02) {
+          tiles[idx(x, y)].terrain = 'water';
+        } else if (bestRatio > 0.74) {
+          tiles[idx(x, y)].terrain = 'sand';
+        } else if (bestRatio < 0.42 && noise(x, y) > 0.76) {
+          tiles[idx(x, y)].terrain = 'forest';
+        } else {
+          tiles[idx(x, y)].terrain = 'grass';
+        }
+      }
+    }
+  } else if (template === 'jungle') {
+    defaultName = 'Emerald Jungle';
+    subtitle = 'Lush tropical forest clusters rich with wild animals';
+    for (let y = 0; y < GRID_ROWS; y++) {
+      for (let x = 0; x < GRID_COLS; x++) {
+        const wave = Math.sin(x * 0.42 + y * 0.28) + Math.cos(x * 0.23 - y * 0.48);
+        const centerClear = Math.hypot(x - cx, y - cy) < 4.5;
+        if (!centerClear && (wave > 0.35 || noise(x, y) > 0.7)) {
+          tiles[idx(x, y)].terrain = 'forest';
+        } else if (Math.abs(x - (16 + Math.round(Math.sin(y * 0.4) * 1.5))) === 0 && y > 1 && y < GRID_ROWS - 2 && noise(x, y) > 0.85) {
+          tiles[idx(x, y)].terrain = 'water';
+        } else {
+          tiles[idx(x, y)].terrain = 'grass';
+        }
+      }
+    }
+    // Small jungle creek
+    for (let y = 0; y < GRID_ROWS; y++) {
+      const rx = 24 + Math.round(Math.sin(y * 0.45) * 1.4);
+      if (rx >= 0 && rx < GRID_COLS) {
+        tiles[idx(rx, y)].terrain = 'water';
+      }
+    }
+  } else if (template === 'river') {
+    defaultName = 'Twin Banks River';
+    subtitle = 'Grassy valley split down the middle by a winding river';
+    for (let y = 0; y < GRID_ROWS; y++) {
+      const rx = Math.round(cx + Math.sin(y * 0.36) * 2.2);
+      for (let dx = -1; dx <= 1; dx++) {
+        const tx = rx + dx;
+        if (tx >= 0 && tx < GRID_COLS) {
+          tiles[idx(tx, y)].terrain = 'water';
+        }
+      }
+      const bankLeft = rx - 2;
+      const bankRight = rx + 2;
+      if (bankLeft >= 0 && noise(bankLeft, y) > 0.65) tiles[idx(bankLeft, y)].terrain = 'sand';
+      if (bankRight < GRID_COLS && noise(bankRight, y) > 0.65) tiles[idx(bankRight, y)].terrain = 'sand';
+    }
+    // Forest clumps near outer edges
+    for (let y = 0; y < GRID_ROWS; y++) {
+      for (let x = 0; x < GRID_COLS; x++) {
+        if (tiles[idx(x, y)].terrain === 'grass' && (x <= 5 || x >= GRID_COLS - 6) && noise(x, y) > 0.62) {
+          tiles[idx(x, y)].terrain = 'forest';
+        }
+      }
+    }
+  } else if (template === 'pond') {
+    defaultName = 'Willow Pond';
+    subtitle = 'Peaceful pond surrounded by trees and wildlife glades';
+    for (let y = 0; y < GRID_ROWS; y++) {
+      for (let x = 0; x < GRID_COLS; x++) {
+        const dist = Math.hypot((x - cx) / 5.4, (y - cy) / 3.8) + Math.sin(x * 0.6 + y * 0.5) * 0.1;
+        if (dist < 0.88) {
+          tiles[idx(x, y)].terrain = 'water';
+        } else if (dist < 1.08 && noise(x, y) > 0.5) {
+          tiles[idx(x, y)].terrain = 'sand';
+        } else if (dist > 1.35 && dist < 2.1 && noise(x, y) > 0.6) {
+          tiles[idx(x, y)].terrain = 'forest';
+        }
+      }
+    }
+  }
+
+  return {
+    id: `biome_${template}_${Date.now()}`,
+    name: customName?.trim() || defaultName,
+    subtitle,
+    updatedAt: Date.now(),
+    gridCols: GRID_COLS,
+    gridRows: GRID_ROWS,
+    template,
     tiles,
     customBlueprints: [],
   };
@@ -1184,5 +1535,5 @@ function buildBlankPreset(): SavedMapData {
 export const PRESET_MAPS: SavedMapData[] = [
   buildOakridgePreset(),
   buildTwinBridgesPreset(),
-  buildBlankPreset(),
+  buildHarborMetroPreset(),
 ];

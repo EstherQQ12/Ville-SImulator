@@ -7,39 +7,61 @@ const DIRS: GridPoint[] = [
   { x: -1, y: 0 },
 ];
 
-export function inBounds(x: number, y: number): boolean {
-  return x >= 0 && x < GRID_COLS && y >= 0 && y < GRID_ROWS;
+export function inBounds(
+  x: number,
+  y: number,
+  cols = GRID_COLS,
+  rows = GRID_ROWS
+): boolean {
+  return x >= 0 && x < cols && y >= 0 && y < rows;
 }
 
-export function getRoadNeighbors(tiles: MapTile[], x: number, y: number): GridPoint[] {
+export function getRoadNeighbors(
+  tiles: MapTile[],
+  x: number,
+  y: number,
+  cols = GRID_COLS,
+  rows = GRID_ROWS
+): GridPoint[] {
   const res: GridPoint[] = [];
   for (const d of DIRS) {
     const nx = x + d.x;
     const ny = y + d.y;
-    if (inBounds(nx, ny) && tiles[ny * GRID_COLS + nx].hasRoad) {
+    if (inBounds(nx, ny, cols, rows) && tiles[ny * cols + nx]?.hasRoad) {
       res.push({ x: nx, y: ny });
     }
   }
   return res;
 }
 
-export function getRoadMask(tiles: MapTile[], x: number, y: number): number {
+export function getRoadMask(
+  tiles: MapTile[],
+  x: number,
+  y: number,
+  cols = GRID_COLS,
+  rows = GRID_ROWS
+): number {
   // Bitmask: N=1, E=2, S=4, W=8
   let mask = 0;
-  if (inBounds(x, y - 1) && tiles[(y - 1) * GRID_COLS + x].hasRoad) mask |= 1;
-  if (inBounds(x + 1, y) && tiles[y * GRID_COLS + (x + 1)].hasRoad) mask |= 2;
-  if (inBounds(x, y + 1) && tiles[(y + 1) * GRID_COLS + x].hasRoad) mask |= 4;
-  if (inBounds(x - 1, y) && tiles[y * GRID_COLS + (x - 1)].hasRoad) mask |= 8;
+  if (inBounds(x, y - 1, cols, rows) && tiles[(y - 1) * cols + x]?.hasRoad) mask |= 1;
+  if (inBounds(x + 1, y, cols, rows) && tiles[y * cols + (x + 1)]?.hasRoad) mask |= 2;
+  if (inBounds(x, y + 1, cols, rows) && tiles[(y + 1) * cols + x]?.hasRoad) mask |= 4;
+  if (inBounds(x - 1, y, cols, rows) && tiles[y * cols + (x - 1)]?.hasRoad) mask |= 8;
   return mask;
 }
 
-export function getEffectiveRoadMask(tiles: MapTile[], x: number, y: number): number {
+export function getEffectiveRoadMask(
+  tiles: MapTile[],
+  x: number,
+  y: number,
+  cols = GRID_COLS,
+  rows = GRID_ROWS
+): number {
   const has = (tx: number, ty: number) =>
-    inBounds(tx, ty) && tiles[ty * GRID_COLS + tx].hasRoad;
+    inBounds(tx, ty, cols, rows) && Boolean(tiles[ty * cols + tx]?.hasRoad);
   if (!has(x, y)) return 0;
 
   let mask = 0;
-  // North edge (x, y-1): suppress only if both rows run parallel E-W with no N/S continuation
   if (has(x, y - 1)) {
     const parallelEW =
       (has(x - 1, y) || has(x + 1, y)) &&
@@ -48,7 +70,6 @@ export function getEffectiveRoadMask(tiles: MapTile[], x: number, y: number): nu
       !has(x, y + 1);
     if (!parallelEW) mask |= 1;
   }
-  // South edge (x, y+1)
   if (has(x, y + 1)) {
     const parallelEW =
       (has(x - 1, y) || has(x + 1, y)) &&
@@ -57,7 +78,6 @@ export function getEffectiveRoadMask(tiles: MapTile[], x: number, y: number): nu
       !has(x, y + 2);
     if (!parallelEW) mask |= 4;
   }
-  // East edge (x+1, y): suppress only if both cols run parallel N-S with no E/W continuation
   if (has(x + 1, y)) {
     const parallelNS =
       (has(x, y - 1) || has(x, y + 1)) &&
@@ -66,7 +86,6 @@ export function getEffectiveRoadMask(tiles: MapTile[], x: number, y: number): nu
       !has(x + 2, y);
     if (!parallelNS) mask |= 2;
   }
-  // West edge (x-1, y)
   if (has(x - 1, y)) {
     const parallelNS =
       (has(x, y - 1) || has(x, y + 1)) &&
@@ -83,17 +102,30 @@ export function isHighwayTile(_tiles: MapTile[], _x: number, _y: number): boolea
   return false;
 }
 
-export function isIntersectionTile(tiles: MapTile[], x: number, y: number): boolean {
-  const tile = tiles[y * GRID_COLS + x];
+export function isIntersectionTile(
+  tiles: MapTile[],
+  x: number,
+  y: number,
+  cols = GRID_COLS,
+  rows = GRID_ROWS
+): boolean {
+  if (!inBounds(x, y, cols, rows)) return false;
+  const tile = tiles[y * cols + x];
   if (!tile || !tile.hasRoad) return false;
-  const mask = getEffectiveRoadMask(tiles, x, y);
+  const mask = getEffectiveRoadMask(tiles, x, y, cols, rows);
   const arms =
     ((mask & 1) ? 1 : 0) + ((mask & 2) ? 1 : 0) + ((mask & 4) ? 1 : 0) + ((mask & 8) ? 1 : 0);
   return arms >= 3;
 }
 
-export function findAdjacentRoadTile(tiles: MapTile[], bx: number, by: number): GridPoint | null {
-  const candidates = getRoadNeighbors(tiles, bx, by);
+export function findAdjacentRoadTile(
+  tiles: MapTile[],
+  bx: number,
+  by: number,
+  cols = GRID_COLS,
+  rows = GRID_ROWS
+): GridPoint | null {
+  const candidates = getRoadNeighbors(tiles, bx, by, cols, rows);
   if (candidates.length === 0) return null;
   return candidates[Math.floor(Math.random() * candidates.length)];
 }
@@ -102,35 +134,38 @@ export function findRoadPath(
   tiles: MapTile[],
   start: GridPoint,
   goal: GridPoint,
-  congestionWeight = 1.4
+  congestionWeight = 1.4,
+  cols = GRID_COLS,
+  rows = GRID_ROWS
 ): GridPoint[] | null {
-  if (!inBounds(start.x, start.y) || !inBounds(goal.x, goal.y)) return null;
-  const startTile = tiles[start.y * GRID_COLS + start.x];
-  const goalTile = tiles[goal.y * GRID_COLS + goal.x];
-  if (!startTile.hasRoad || !goalTile.hasRoad) return null;
+  if (!inBounds(start.x, start.y, cols, rows) || !inBounds(goal.x, goal.y, cols, rows)) return null;
+  const startTile = tiles[start.y * cols + start.x];
+  const goalTile = tiles[goal.y * cols + goal.x];
+  if (!startTile?.hasRoad || !goalTile?.hasRoad) return null;
+  if (startTile.terrain === 'void' || goalTile.terrain === 'void') return null;
 
   if (start.x === goal.x && start.y === goal.y) {
     return [start];
   }
 
-  const total = GRID_COLS * GRID_ROWS;
+  const total = cols * rows;
   const gScore = new Float32Array(total).fill(Infinity);
   const fScore = new Float32Array(total).fill(Infinity);
   const cameFrom = new Int32Array(total).fill(-1);
   const closed = new Uint8Array(total);
   const inOpen = new Uint8Array(total);
 
-  const startIdx = start.y * GRID_COLS + start.x;
-  const goalIdx = goal.y * GRID_COLS + goal.x;
+  const startIdx = start.y * cols + start.x;
+  const goalIdx = goal.y * cols + goal.x;
 
   gScore[startIdx] = 0;
   fScore[startIdx] = Math.abs(goal.x - start.x) + Math.abs(goal.y - start.y);
 
   const open: number[] = [startIdx];
   inOpen[startIdx] = 1;
+  let stepsLeft = Math.max(1400, total * 2);
 
-  while (open.length > 0) {
-    // Find lowest fScore in open list
+  while (open.length > 0 && stepsLeft-- > 0) {
     let bestPos = 0;
     let current = open[0];
     let bestF = fScore[current];
@@ -148,8 +183,8 @@ export function findRoadPath(
       let curr = current;
       while (curr !== -1) {
         path.push({
-          x: curr % GRID_COLS,
-          y: Math.floor(curr / GRID_COLS),
+          x: curr % cols,
+          y: Math.floor(curr / cols),
         });
         curr = cameFrom[curr];
       }
@@ -161,22 +196,21 @@ export function findRoadPath(
     inOpen[current] = 0;
     closed[current] = 1;
 
-    const cx = current % GRID_COLS;
-    const cy = Math.floor(current / GRID_COLS);
+    const cx = current % cols;
+    const cy = Math.floor(current / cols);
     const prevIdx = cameFrom[current];
-    const px = prevIdx !== -1 ? prevIdx % GRID_COLS : cx;
-    const py = prevIdx !== -1 ? Math.floor(prevIdx / GRID_COLS) : cy;
+    const px = prevIdx !== -1 ? prevIdx % cols : cx;
+    const py = prevIdx !== -1 ? Math.floor(prevIdx / cols) : cy;
 
     for (const d of DIRS) {
       const nx = cx + d.x;
       const ny = cy + d.y;
-      if (!inBounds(nx, ny)) continue;
-      const nIdx = ny * GRID_COLS + nx;
+      if (!inBounds(nx, ny, cols, rows)) continue;
+      const nIdx = ny * cols + nx;
       if (closed[nIdx]) continue;
       const nTile = tiles[nIdx];
-      if (!nTile.hasRoad || nTile.isBridgeBroken) continue;
+      if (!nTile || nTile.terrain === 'void' || !nTile.hasRoad || nTile.isBridgeBroken) continue;
 
-      // Slight turn penalty so cars prefer straight avenues, plus congestion cost & highway bonus
       let turnPenalty = 0;
       if (prevIdx !== -1) {
         const pdx = cx - px;
@@ -210,6 +244,7 @@ export function isPedestrianTileWalkable(
   allowFrozenWater = false,
   allowAllTerrain = false
 ): boolean {
+  if (tile.terrain === 'void') return false;
   if (allowAllTerrain) return true;
   if (tile.isBridgeBroken) return false;
   if (tile.hasRoad) {
@@ -227,18 +262,20 @@ export function findNearestWalkableTile(
   originX: number,
   originY: number,
   maxRadius = 3,
-  allowFrozenWater = false
+  allowFrozenWater = false,
+  cols = GRID_COLS,
+  rows = GRID_ROWS
 ): GridPoint | null {
-  // Pass 1: prefer open gaps (grass/forest/park/crossings) without solid buildings
   for (let r = 0; r <= maxRadius; r++) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
         const nx = originX + dx;
         const ny = originY + dy;
-        if (!inBounds(nx, ny)) continue;
-        const t = tiles[ny * GRID_COLS + nx];
+        if (!inBounds(nx, ny, cols, rows)) continue;
+        const t = tiles[ny * cols + nx];
         if (
+          t &&
           isPedestrianTileWalkable(t, allowFrozenWater) &&
           (!t.building || t.building.category === 'park' || t.building.category === 'road_path')
         ) {
@@ -247,16 +284,15 @@ export function findNearestWalkableTile(
       }
     }
   }
-  // Pass 2: fallback to any walkable tile
   for (let r = 0; r <= maxRadius; r++) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
         const nx = originX + dx;
         const ny = originY + dy;
-        if (!inBounds(nx, ny)) continue;
-        const t = tiles[ny * GRID_COLS + nx];
-        if (isPedestrianTileWalkable(t, allowFrozenWater)) {
+        if (!inBounds(nx, ny, cols, rows)) continue;
+        const t = tiles[ny * cols + nx];
+        if (t && isPedestrianTileWalkable(t, allowFrozenWater)) {
           return { x: nx, y: ny };
         }
       }
@@ -265,43 +301,41 @@ export function findNearestWalkableTile(
   return null;
 }
 
-/**
- * Finds a 4-directional walking path for citizens, woodcutters, planters, fishers, and hobbyists.
- * Strictly prohibits stepping onto road tiles unless the tile has a Zebra Crossing (or road_path),
- * except when allowAllTerrain is enabled (foreign invading armies & tanks).
- */
 export function findPedestrianPath(
   tiles: MapTile[],
   start: GridPoint,
   goal: GridPoint,
   allowFrozenWater = false,
-  allowAllTerrain = false
+  allowAllTerrain = false,
+  cols = GRID_COLS,
+  rows = GRID_ROWS
 ): GridPoint[] | null {
-  if (!inBounds(start.x, start.y) || !inBounds(goal.x, goal.y)) return null;
-  const goalTile = tiles[goal.y * GRID_COLS + goal.x];
-  if (!isPedestrianTileWalkable(goalTile, allowFrozenWater, allowAllTerrain)) return null;
+  if (!inBounds(start.x, start.y, cols, rows) || !inBounds(goal.x, goal.y, cols, rows)) return null;
+  const goalTile = tiles[goal.y * cols + goal.x];
+  if (!goalTile || !isPedestrianTileWalkable(goalTile, allowFrozenWater, allowAllTerrain)) return null;
 
   if (start.x === goal.x && start.y === goal.y) {
     return [start];
   }
 
-  const total = GRID_COLS * GRID_ROWS;
+  const total = cols * rows;
   const gScore = new Float32Array(total).fill(Infinity);
   const fScore = new Float32Array(total).fill(Infinity);
   const cameFrom = new Int32Array(total).fill(-1);
   const closed = new Uint8Array(total);
   const inOpen = new Uint8Array(total);
 
-  const startIdx = start.y * GRID_COLS + start.x;
-  const goalIdx = goal.y * GRID_COLS + goal.x;
+  const startIdx = start.y * cols + start.x;
+  const goalIdx = goal.y * cols + goal.x;
 
   gScore[startIdx] = 0;
   fScore[startIdx] = Math.abs(goal.x - start.x) + Math.abs(goal.y - start.y);
 
   const open: number[] = [startIdx];
   inOpen[startIdx] = 1;
+  let stepsLeft = Math.max(1400, total * 2);
 
-  while (open.length > 0) {
+  while (open.length > 0 && stepsLeft-- > 0) {
     let bestPos = 0;
     let current = open[0];
     let bestF = fScore[current];
@@ -319,8 +353,8 @@ export function findPedestrianPath(
       let curr = current;
       while (curr !== -1) {
         path.push({
-          x: curr % GRID_COLS,
-          y: Math.floor(curr / GRID_COLS),
+          x: curr % cols,
+          y: Math.floor(curr / cols),
         });
         curr = cameFrom[curr];
       }
@@ -332,20 +366,19 @@ export function findPedestrianPath(
     inOpen[current] = 0;
     closed[current] = 1;
 
-    const cx = current % GRID_COLS;
-    const cy = Math.floor(current / GRID_COLS);
+    const cx = current % cols;
+    const cy = Math.floor(current / cols);
 
     for (const d of DIRS) {
       const nx = cx + d.x;
       const ny = cy + d.y;
-      if (!inBounds(nx, ny)) continue;
-      const nIdx = ny * GRID_COLS + nx;
+      if (!inBounds(nx, ny, cols, rows)) continue;
+      const nIdx = ny * cols + nx;
       if (closed[nIdx]) continue;
 
       const nTile = tiles[nIdx];
-      if (!isPedestrianTileWalkable(nTile, allowFrozenWater, allowAllTerrain)) continue;
+      if (!nTile || !isPedestrianTileWalkable(nTile, allowFrozenWater, allowAllTerrain)) continue;
 
-      // Strictly forbid walking on top of intermediate buildings: route through gaps, parks, crossings & open ground
       if (
         !allowAllTerrain &&
         nIdx !== goalIdx &&
