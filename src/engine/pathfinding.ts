@@ -64,32 +64,40 @@ export function getEffectiveRoadMask(
   let mask = 0;
   if (has(x, y - 1)) {
     const parallelEW =
-      (has(x - 1, y) || has(x + 1, y)) &&
-      (has(x - 1, y - 1) || has(x + 1, y - 1)) &&
+      has(x - 1, y) &&
+      has(x - 1, y - 1) &&
+      has(x + 1, y) &&
+      has(x + 1, y - 1) &&
       !has(x, y - 2) &&
       !has(x, y + 1);
     if (!parallelEW) mask |= 1;
   }
   if (has(x, y + 1)) {
     const parallelEW =
-      (has(x - 1, y) || has(x + 1, y)) &&
-      (has(x - 1, y + 1) || has(x + 1, y + 1)) &&
+      has(x - 1, y) &&
+      has(x - 1, y + 1) &&
+      has(x + 1, y) &&
+      has(x + 1, y + 1) &&
       !has(x, y - 1) &&
       !has(x, y + 2);
     if (!parallelEW) mask |= 4;
   }
   if (has(x + 1, y)) {
     const parallelNS =
-      (has(x, y - 1) || has(x, y + 1)) &&
-      (has(x + 1, y - 1) || has(x + 1, y + 1)) &&
+      has(x, y - 1) &&
+      has(x + 1, y - 1) &&
+      has(x, y + 1) &&
+      has(x + 1, y + 1) &&
       !has(x - 1, y) &&
       !has(x + 2, y);
     if (!parallelNS) mask |= 2;
   }
   if (has(x - 1, y)) {
     const parallelNS =
-      (has(x, y - 1) || has(x, y + 1)) &&
-      (has(x - 1, y - 1) || has(x - 1, y + 1)) &&
+      has(x, y - 1) &&
+      has(x - 1, y - 1) &&
+      has(x, y + 1) &&
+      has(x - 1, y + 1) &&
       !has(x + 1, y) &&
       !has(x - 2, y);
     if (!parallelNS) mask |= 8;
@@ -280,11 +288,14 @@ export function findRoadPath(
 
     const cx = current % cols;
     const cy = Math.floor(current / cols);
+    const currentMask = getEffectiveRoadMask(tiles, cx, cy, cols, rows);
     const prevIdx = cameFrom[current];
     const px = prevIdx !== -1 ? prevIdx % cols : cx;
     const py = prevIdx !== -1 ? Math.floor(prevIdx / cols) : cy;
 
-    for (const d of DIRS) {
+    for (let di = 0; di < DIRS.length; di++) {
+      if (!(currentMask & (1 << di))) continue;
+      const d = DIRS[di];
       const nx = cx + d.x;
       const ny = cy + d.y;
       if (!inBounds(nx, ny, cols, rows)) continue;
