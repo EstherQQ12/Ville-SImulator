@@ -1,12 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Activity,
-  Check,
   Cloud,
   CloudFog,
   CloudLightning,
   CloudRain,
-  Coins,
   Eraser,
   Eye,
   EyeOff,
@@ -20,6 +18,7 @@ import {
   Maximize2,
   Meh,
   Menu,
+  Minus,
   Moon,
   MousePointer2,
   Music,
@@ -30,7 +29,6 @@ import {
   Plus,
   RefreshCw,
   Route,
-  Save,
   Smile,
   Snowflake,
   Sprout,
@@ -67,7 +65,6 @@ interface HudOverlayProps {
   showTrafficOverlay: boolean;
   isMuted: boolean;
   isMusicEnabled: boolean;
-  justSaved: boolean;
   isUiHidden: boolean;
   tutorialHighlight?: TutorialHighlightTarget;
   onToggleRun: () => void;
@@ -81,7 +78,6 @@ interface HudOverlayProps {
   onToggleTrafficOverlay: () => void;
   onToggleHideUi: () => void;
   onOpenMaps: () => void;
-  onSaveChanges: () => void;
   onOpenNewspaper: () => void;
   onOpenPermits: () => void;
   onOpenPlaceFinder: () => void;
@@ -97,6 +93,8 @@ interface HudOverlayProps {
   onFocusCityHall: () => void;
   onCycleSeason: () => void;
   onCycleWeather: () => void;
+  landBrushSize: number;
+  onSetLandBrushSize: (size: number) => void;
 }
 
 function PhaseIcon({ phase }: { phase: TimePhase }) {
@@ -141,7 +139,6 @@ export function HudOverlay({
   showTrafficOverlay,
   isMuted,
   isMusicEnabled,
-  justSaved,
   isUiHidden,
   tutorialHighlight = null,
   onToggleRun,
@@ -155,7 +152,6 @@ export function HudOverlay({
   onToggleTrafficOverlay,
   onToggleHideUi,
   onOpenMaps,
-  onSaveChanges,
   onOpenNewspaper,
   onOpenPermits,
   onOpenPlaceFinder,
@@ -171,6 +167,8 @@ export function HudOverlay({
   onFocusCityHall,
   onCycleSeason,
   onCycleWeather,
+  landBrushSize,
+  onSetLandBrushSize,
 }: HudOverlayProps) {
   const [topLeftOffset, setTopLeftOffset] = useState({ x: 0, y: 0 });
   const [topRightOffset, setTopRightOffset] = useState({ x: 0, y: 0 });
@@ -261,13 +259,6 @@ export function HudOverlay({
       : stats.happinessMood === 'Content'
       ? 'text-sky-300'
       : stats.happinessMood === 'Strained'
-      ? 'text-amber-400'
-      : 'text-rose-400';
-
-  const economyColor =
-    stats.economyScore >= 75
-      ? 'text-emerald-400'
-      : stats.economyScore >= 45
       ? 'text-amber-400'
       : 'text-rose-400';
 
@@ -446,14 +437,6 @@ export function HudOverlay({
               {stats.citizenHappiness}%
             </span>
             <span aria-hidden="true" className="text-slate-600">·</span>
-            <span
-              className={`inline-flex items-center gap-1 font-semibold ${economyColor}`}
-              title={`City Economy: ${stats.economyScore}%${stats.totalLawsuits > 0 ? ` (${stats.totalLawsuits} lawsuits)` : ''}`}
-            >
-              <Coins className="w-3.5 h-3.5" />
-              {stats.economyScore}%
-            </span>
-            <span aria-hidden="true" className="text-slate-600">·</span>
             <span>{stats.activeCars} Cars</span>
             <span aria-hidden="true" className="text-slate-600">·</span>
             <span className={flowStatus.color}>
@@ -609,7 +592,7 @@ export function HudOverlay({
           className={`pointer-events-auto ml-auto flex items-center gap-2 bg-[#0F172A]/95 border rounded-xl px-2.5 py-2 shadow-lg max-w-full overflow-x-auto touch-pan-x transition-shadow ${
             tutorialHighlight === 'permits_news' ||
             tutorialHighlight === 'map_traffic_music' ||
-            tutorialHighlight === 'hide_ui_save'
+            tutorialHighlight === 'hide_ui_refresh'
               ? 'border-amber-400/80 ring-1 ring-amber-400/50'
               : 'border-slate-700/80'
           }`}
@@ -634,21 +617,6 @@ export function HudOverlay({
                 <SentimentIcon mood={stats.happinessMood} />
                 <span>{stats.citizenHappiness}%</span>
                 <span className="text-xs font-medium">{stats.happinessMood}</span>
-              </div>
-            </div>
-            <div
-              title={`City Economy: ${stats.economyScore}%${stats.totalLawsuits > 0 ? ` · ${stats.totalLawsuits} tainted fish lawsuits` : ''}`}
-              className="cursor-help"
-            >
-              <div className="text-[10px] text-slate-400">Economy</div>
-              <div className={`flex items-center gap-1 font-mono-tabular text-sm font-semibold ${economyColor} whitespace-nowrap`}>
-                <Coins className="w-3.5 h-3.5" />
-                <span>{stats.economyScore}%</span>
-                {stats.totalLawsuits > 0 && (
-                  <span className="text-[11px] font-medium text-rose-400">
-                    ({stats.totalLawsuits} sued)
-                  </span>
-                )}
               </div>
             </div>
             <div>
@@ -907,30 +875,13 @@ export function HudOverlay({
               onClick={onRefreshSimulation}
               title="Refresh & Smooth Simulation — Clears laggy clutter without restarting your city"
               className={`p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-300 transition-colors shrink-0 ${
-                tutorialHighlight === 'hide_ui_save'
+                tutorialHighlight === 'hide_ui_refresh'
                   ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
                   : ''
               }`}
               aria-label="Refresh simulation"
             >
               <RefreshCw className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={onSaveChanges}
-              title="Save city map changes to browser storage"
-              className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                justSaved
-                  ? 'bg-emerald-500 text-slate-950 font-semibold'
-                  : 'bg-slate-800 hover:bg-slate-700 text-emerald-300'
-              } ${
-                tutorialHighlight === 'hide_ui_save'
-                  ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
-                  : ''
-              }`}
-            >
-              {justSaved ? <Check className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}
-              <span className="hidden sm:inline">{justSaved ? 'Saved!' : 'Save'}</span>
             </button>
             <button
               type="button"
@@ -951,7 +902,7 @@ export function HudOverlay({
             <button
               type="button"
               onClick={onOpenMaps}
-              title="Save / Load Maps"
+              title="Worlds & Biomes (Auto-Saved)"
               className="p-1.5 rounded-lg text-slate-300 hover:bg-slate-800 transition-colors shrink-0"
             >
               <FolderOpen className="w-4 h-4" />
@@ -985,7 +936,7 @@ export function HudOverlay({
               onClick={onToggleHideUi}
               title="Hide UI (H)"
               className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0 ${
-                tutorialHighlight === 'hide_ui_save'
+                tutorialHighlight === 'hide_ui_refresh'
                   ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
                   : ''
               }`}
@@ -1006,7 +957,59 @@ export function HudOverlay({
       </div>
 
       {/* Bottom-Left Compact Dock (Keeps Bottom-Right Corner Empty & Unobstructed) */}
-      <div className="flex justify-start w-full min-w-0 pr-40 sm:pr-48">
+      <div className="flex flex-col items-start gap-1.5 w-full min-w-0 pr-40 sm:pr-48">
+        {toolMode === 'land' && (
+          <div
+            style={{ transform: `translate3d(${bottomOffset.x}px, ${bottomOffset.y}px, 0)` }}
+            className="pointer-events-auto max-w-full overflow-x-auto touch-pan-x flex items-center gap-1.5 bg-[#0F172A]/95 border border-emerald-500/40 rounded-xl px-2.5 py-1.5 shadow-xl"
+          >
+            <span className="text-[11px] font-semibold text-emerald-300 whitespace-nowrap">
+              Fill Size:
+            </span>
+            <button
+              type="button"
+              onClick={() => onSetLandBrushSize(Math.max(1, landBrushSize - 1))}
+              disabled={landBrushSize <= 1}
+              title="Decrease blocks filled at once"
+              className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              aria-label="Decrease land fill size"
+            >
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+            {[1, 2, 3, 4, 5].map((size) => (
+              <button
+                key={size}
+                type="button"
+                onClick={() => onSetLandBrushSize(size)}
+                title={`Fill ${size * size} ${size === 1 ? 'block' : 'blocks'} at once`}
+                className={`px-2 py-0.5 rounded-md text-[11px] font-mono-tabular font-semibold transition-colors whitespace-nowrap ${
+                  landBrushSize === size
+                    ? 'bg-emerald-400 text-slate-950'
+                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                }`}
+              >
+                {size}×{size}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => onSetLandBrushSize(Math.min(5, landBrushSize + 1))}
+              disabled={landBrushSize >= 5}
+              title="Increase blocks filled at once"
+              className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              aria-label="Increase land fill size"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+            <span className="text-[11px] text-slate-300 whitespace-nowrap pl-1 border-l border-slate-700/80">
+              {landBrushSize * landBrushSize} {landBrushSize === 1 ? 'block' : 'blocks'} ·{' '}
+              <span className="text-emerald-300 font-semibold font-mono-tabular">
+                {stats.expansionCredits}
+              </span>{' '}
+              left
+            </span>
+          </div>
+        )}
         <div
           ref={bottomToolbarRef}
           style={{ transform: `translate3d(${bottomOffset.x}px, ${bottomOffset.y}px, 0)` }}
@@ -1155,6 +1158,17 @@ export function HudOverlay({
             >
               <Maximize2 className="w-3.5 h-3.5" />
               <span>Land</span>
+              {landBrushSize > 1 && (
+                <span
+                  className={`font-mono-tabular text-[10px] px-1 rounded ${
+                    toolMode === 'land'
+                      ? 'bg-slate-950/25 text-slate-950 font-bold'
+                      : 'bg-emerald-500/20 text-emerald-200'
+                  }`}
+                >
+                  {landBrushSize}×{landBrushSize}
+                </span>
+              )}
               <span
                 className={`font-mono-tabular text-[10px] px-1 rounded ${
                   toolMode === 'land'

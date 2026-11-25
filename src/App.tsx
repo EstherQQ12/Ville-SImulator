@@ -9,7 +9,13 @@ import { PermitProposalsModal } from './components/PermitProposalsModal';
 import { PlaceFinderModal } from './components/PlaceFinderModal';
 import { TitleScreen } from './components/TitleScreen';
 import { TutorialHighlightTarget, TutorialOverlay, TutorialStep } from './components/TutorialOverlay';
-import { createBiomePreset, createTutorialPreset, DEFAULT_BLUEPRINTS, PRESET_MAPS } from './data/defaultBlueprints';
+import {
+  createBiomePreset,
+  createCustomBiomePreset,
+  createTutorialPreset,
+  DEFAULT_BLUEPRINTS,
+  PRESET_MAPS,
+} from './data/defaultBlueprints';
 import { isHighwayTile, isIntersectionTile } from './engine/pathfinding';
 import { CameraState, HoverState, renderSimulation } from './engine/renderer';
 import { CitySimulation } from './engine/simulation';
@@ -17,6 +23,7 @@ import {
   BuildingBlueprint,
   CityEventType,
   CrisisType,
+  CustomBiomeConfig,
   GameState,
   ICON_SIZE,
   MapTemplateKind,
@@ -146,6 +153,7 @@ export default function App() {
   const isPaintingToolRef = useRef(false);
   const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const lastPaintedTileRef = useRef<string>('');
+  const lastPointerTileRef = useRef<{ x: number; y: number } | null>(null);
   const zebraPaintTargetRef = useRef<boolean>(true);
   const footbridgePaintTargetRef = useRef<boolean>(true);
   const landPaintModeRef = useRef<'add' | 'remove'>('add');
@@ -163,6 +171,7 @@ export default function App() {
   const [isRunning, setIsRunning] = useState<boolean>(true);
   const [timeScale, setTimeScale] = useState<number>(1);
   const [toolMode, setToolMode] = useState<ToolMode>('pan');
+  const [landBrushSize, setLandBrushSize] = useState<number>(1);
   const [blueprints, setBlueprints] = useState<BuildingBlueprint[]>(() =>
     simRef.current!.getAllBlueprints()
   );
@@ -175,7 +184,6 @@ export default function App() {
   const [isNewspaperOpen, setIsNewspaperOpen] = useState<boolean>(false);
   const [draftNewsPhoto, setDraftNewsPhoto] = useState<string | null>(null);
   const [draftInitialCrop, setDraftInitialCrop] = useState<NormalizedCropRect | null>(null);
-  const [justSaved, setJustSaved] = useState<boolean>(false);
 
   const [selection, setSelection] = useState<SelectionTarget | null>(null);
   const [selectedCarId, setSelectedCarId] = useState<string | null>(null);
@@ -201,6 +209,8 @@ export default function App() {
   gameStateRef.current = gameState;
   const toolModeRef = useRef(toolMode);
   toolModeRef.current = toolMode;
+  const landBrushSizeRef = useRef(landBrushSize);
+  landBrushSizeRef.current = landBrushSize;
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
   const selectedCarIdRef = useRef(selectedCarId);
@@ -222,7 +232,20 @@ export default function App() {
     const sim = simRef.current;
     if (!sim) return;
     const exported = sim.exportMapData(sim.mapName);
+    const isTrashed = loadTrashedMapsFromStorage().some((t) => t.map.id === exported.id);
+    if (isTrashed) return;
     writeRuntimeMapToStorage(exported);
+    const isPreset = PRESET_MAPS.some((p) => p.id === exported.id);
+    if (!isPreset && exported.id !== 'tutorial_town') {
+      try {
+        const existing = loadSavedMapsFromStorage();
+        const idx = existing.findIndex((m) => m.id === exported.id);
+        const next = idx >= 0 ? existing.map((m, i) => (i === idx ? exported : m)) : [exported, ...existing];
+        localStorage.setItem(SAVED_MAPS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage quota errors
+      }
+    }
   }, []);
 
   const fitCameraToViewport = useCallback(() => {
@@ -339,6 +362,7 @@ export default function App() {
             showTrafficOverlay: showTrafficRef.current,
             showGrid: gameStateRef.current === 'PLAYING' ? showGridRef.current : false,
             wallTimeSeconds: now / 1000,
+            landBrushSize: landBrushSizeRef.current,
           });
           ctx.restore();
         }
@@ -629,21 +653,43 @@ export default function App() {
       if (isClickStart) {
         landPaintModeRef.current = tile.terrain === 'void' ? 'add' : 'remove';
       }
-      if (sim.applyExpansionLand(tx, ty, landPaintModeRef.current)) {
+      const res = sim.applyExpansionLandBrush(
+        tx,
+        ty,
+        landBrushSizeRef.current,
+        landPaintModeRef.current
+      );
+      if (res.changedCount > 0) {
         if (landPaintModeRef.current === 'add') {
           soundEngine.playPlaceBuilding();
         } else {
           soundEngine.playBulldoze();
-          if (selectionRef.current?.x === tx && selectionRef.current?.y === ty) {
+          if (
+            selectionRef.current &&
+            res.affectedTiles.some(
+              (pt) => pt.x === selectionRef.current?.x && pt.y === selectionRef.current?.y
+            )
+          ) {
             setSelection(null);
           }
         }
         setStats(sim.getStats());
-      } else if (isClickStart && tile.terrain !== 'void' && tile.isDefaultLand) {
+      } else if (isClickStart && res.lockedOriginalOnly) {
         sim.floatingLabels.push({
           wx: (tx + 0.5) * TILE_SIZE,
           wy: (ty + 0.35) * TILE_SIZE,
           text: 'Original Land Locked',
+          color: '#FEF2F2',
+          bgColor: '#991B1B',
+          age: 0,
+          maxAge: 1.5,
+        });
+        soundEngine.playBulldoze();
+      } else if (isClickStart && landPaintModeRef.current === 'add' && res.outOfCredits) {
+        sim.floatingLabels.push({
+          wx: (tx + 0.5) * TILE_SIZE,
+          wy: (ty + 0.35) * TILE_SIZE,
+          text: 'No Land Boxes Left!',
           color: '#FEF2F2',
           bgColor: '#991B1B',
           age: 0,
@@ -800,6 +846,7 @@ export default function App() {
     if (activePointersRef.current.size >= 2) {
       isPaintingToolRef.current = false;
       isPanningRef.current = false;
+      lastPointerTileRef.current = null;
       hoverRef.current.visible = false;
       return;
     }
@@ -838,8 +885,43 @@ export default function App() {
       }
       isPaintingToolRef.current = true;
       lastPaintedTileRef.current = '';
+      lastPointerTileRef.current = { x: tx, y: ty };
       applyToolAtTile(tx, ty, true);
     }
+  };
+
+  // Supercover grid walk so fast pointer sweeps never skip intermediate tiles
+  const getGridLineTiles = (x0: number, y0: number, x1: number, y1: number) => {
+    const pts: { x: number; y: number }[] = [];
+    const dx = Math.abs(x1 - x0);
+    const dy = Math.abs(y1 - y0);
+    const sx = x0 < x1 ? 1 : -1;
+    const sy = y0 < y1 ? 1 : -1;
+    let x = x0;
+    let y = y0;
+    let n = 1 + dx + dy;
+    let err = dx - dy;
+    const dx2 = dx * 2;
+    const dy2 = dy * 2;
+    for (; n > 0; --n) {
+      pts.push({ x, y });
+      if (x === x1 && y === y1) break;
+      if (err > 0) {
+        x += sx;
+        err -= dy2;
+      } else if (err < 0) {
+        y += sy;
+        err += dx2;
+      } else {
+        // Step orthogonally first, then diagonally, so adjacent chains stay 4-connected
+        pts.push({ x: x + sx, y });
+        x += sx;
+        y += sy;
+        err += dx2 - dy2;
+        n--;
+      }
+    }
+    return pts;
   };
 
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -899,7 +981,16 @@ export default function App() {
     }
 
     if (isPaintingToolRef.current && gameState === 'PLAYING') {
-      applyToolAtTile(tx, ty, false);
+      const prev = lastPointerTileRef.current;
+      if (prev && (prev.x !== tx || prev.y !== ty)) {
+        const line = getGridLineTiles(prev.x, prev.y, tx, ty);
+        for (let i = 1; i < line.length; i++) {
+          applyToolAtTile(line[i].x, line[i].y, false);
+        }
+      } else {
+        applyToolAtTile(tx, ty, false);
+      }
+      lastPointerTileRef.current = { x: tx, y: ty };
     }
   };
 
@@ -913,6 +1004,7 @@ export default function App() {
       isPanningRef.current = false;
       isPaintingToolRef.current = false;
       lastPaintedTileRef.current = '';
+      lastPointerTileRef.current = null;
     }
   };
 
@@ -922,8 +1014,10 @@ export default function App() {
     zoomByFactor(zoomFactor, e.clientX, e.clientY);
   };
 
-  const handleLoadMap = (map: SavedMapData, preferRuntime = true) => {
-    persistCurrentRuntimeMap();
+  const handleLoadMap = (map: SavedMapData, preferRuntime = true, skipPersist = false) => {
+    if (!skipPersist) {
+      persistCurrentRuntimeMap();
+    }
     const sim = simRef.current!;
     const runtimeMaps = loadRuntimeMapsFromStorage();
     const target = preferRuntime && runtimeMaps[map.id] ? runtimeMaps[map.id] : map;
@@ -946,11 +1040,14 @@ export default function App() {
     fitCameraToViewport();
   };
 
-  const handleCreateBiomeMap = (template: MapTemplateKind, customName?: string, startImmediately = false) => {
-    persistCurrentRuntimeMap();
-    const created = createBiomePreset(template, customName);
+  const loadGeneratedBiome = (created: SavedMapData, startImmediately: boolean) => {
     const sim = simRef.current!;
     sim.loadMap(created);
+    try {
+      localStorage.setItem(LAST_ACTIVE_MAP_ID_KEY, created.id);
+    } catch {
+      // Ignore storage quota errors
+    }
     sessionInitializedRef.current = false;
     setSelectedPresetId(created.id);
     setMapName(created.name);
@@ -962,6 +1059,7 @@ export default function App() {
     setDraftInitialCrop(null);
     setStats(sim.getStats());
     persistCurrentRuntimeMap();
+    setSavedMaps(loadSavedMapsFromStorage());
     if (startImmediately) {
       sim.prepareForPlaySession();
       sessionInitializedRef.current = true;
@@ -971,6 +1069,18 @@ export default function App() {
       setIsRunning(true);
     }
     fitCameraToViewport();
+  };
+
+  const handleCreateBiomeMap = (template: MapTemplateKind, customName?: string, startImmediately = false) => {
+    persistCurrentRuntimeMap();
+    const created = createBiomePreset(template, customName);
+    loadGeneratedBiome(created, startImmediately);
+  };
+
+  const handleCreateCustomBiome = (config: CustomBiomeConfig, startImmediately = false) => {
+    persistCurrentRuntimeMap();
+    const created = createCustomBiomePreset(config);
+    loadGeneratedBiome(created, startImmediately);
   };
 
   const handleStartTutorial = () => {
@@ -1012,58 +1122,6 @@ export default function App() {
       maxAge: 4.5,
     });
     soundEngine.playUiTick();
-  };
-
-  const handleSaveMap = (name: string) => {
-    const sim = simRef.current!;
-    sim.mapName = name;
-    setMapName(name);
-    const id = `custom_${Date.now()}`;
-    sim.mapId = id;
-    const exported = sim.exportMapData(name);
-    exported.id = id;
-    writeRuntimeMapToStorage(exported);
-
-    setSavedMaps((prev) => {
-      const next = [exported, ...prev];
-      try {
-        localStorage.setItem(SAVED_MAPS_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        // Ignore storage quota errors
-      }
-      return next;
-    });
-  };
-
-  const saveResetTimerRef = useRef<number | null>(null);
-
-  const handleSaveChanges = () => {
-    const sim = simRef.current!;
-    const currentId = sim.mapId.startsWith('preset_') ? `saved_${sim.mapId}` : sim.mapId;
-    sim.mapId = currentId;
-    const exported = sim.exportMapData(sim.mapName);
-    exported.id = currentId;
-    writeRuntimeMapToStorage(exported);
-
-    setSavedMaps((prev) => {
-      const idx = prev.findIndex((m) => m.id === currentId);
-      const next = idx >= 0 ? prev.map((m, i) => (i === idx ? exported : m)) : [exported, ...prev];
-      try {
-        localStorage.setItem(SAVED_MAPS_STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        // Ignore storage quota errors
-      }
-      return next;
-    });
-
-    soundEngine.playSaveIcon();
-    setJustSaved(true);
-    if (saveResetTimerRef.current !== null) {
-      window.clearTimeout(saveResetTimerRef.current);
-    }
-    saveResetTimerRef.current = window.setTimeout(() => {
-      setJustSaved(false);
-    }, 2000);
   };
 
   const handleMoveWorldToTrash = (mapToTrash: SavedMapData) => {
@@ -1115,7 +1173,7 @@ export default function App() {
         (m) => m.id !== mapToTrash.id && !hiddenPresetIds.includes(m.id)
       );
       const nextFallback = remainingSaved[0] || remainingPresets[0] || createBiomePreset('valley');
-      handleLoadMap(nextFallback, true);
+      handleLoadMap(nextFallback, true, true);
     }
     soundEngine.playBulldoze();
   };
@@ -1339,7 +1397,7 @@ export default function App() {
         : tutorialStep === 9
         ? 'map_traffic_music'
         : tutorialStep === 10
-        ? 'hide_ui_save'
+        ? 'hide_ui_refresh'
         : null
       : null;
 
@@ -1379,6 +1437,7 @@ export default function App() {
           hiddenPresetIds={hiddenPresetIds}
           onSelectMap={(map) => handleLoadMap(map, true)}
           onCreateBiomeMap={(tpl) => handleCreateBiomeMap(tpl, undefined, false)}
+          onCreateCustomBiome={(cfg) => handleCreateCustomBiome(cfg, false)}
           onDeleteWorld={handleMoveWorldToTrash}
           onRestoreTrashedMap={handleRestoreTrashedMap}
           onPermanentDeleteTrashedMap={handlePermanentDeleteTrashedMap}
@@ -1401,7 +1460,6 @@ export default function App() {
           showTrafficOverlay={showTrafficOverlay}
           isMuted={isMuted}
           isMusicEnabled={isMusicEnabled}
-          justSaved={justSaved}
           isUiHidden={isUiHidden}
           tutorialHighlight={tutorialHighlight}
           onToggleRun={() => {
@@ -1456,10 +1514,11 @@ export default function App() {
             soundEngine.playUiTick();
           }}
           onOpenMaps={() => {
+            persistCurrentRuntimeMap();
+            setSavedMaps(loadSavedMapsFromStorage());
             soundEngine.playUiTick();
             setIsMapManagerOpen(true);
           }}
-          onSaveChanges={handleSaveChanges}
           onOpenNewspaper={() => {
             soundEngine.playUiTick();
             simRef.current!.markNewsRead();
@@ -1567,6 +1626,11 @@ export default function App() {
             simRef.current!.cycleWeather(true);
             setStats(simRef.current!.getStats());
           }}
+          landBrushSize={landBrushSize}
+          onSetLandBrushSize={(size) => {
+            setLandBrushSize(Math.max(1, Math.min(5, size)));
+            soundEngine.playUiTick();
+          }}
         />
       )}
 
@@ -1598,7 +1662,6 @@ export default function App() {
             pendingProposalsCount={stats.pendingProposalsCount}
             crises={simRef.current.crises}
             cratersCount={simRef.current.blastCraters.length}
-            economyScore={stats.economyScore}
             totalLawsuits={stats.totalLawsuits}
             prisonInmates={stats.prisonInmates}
             totalJailed={stats.totalJailed}
@@ -1716,16 +1779,15 @@ export default function App() {
         />
       )}
 
-      {/* Save / Load Maps Manager */}
+      {/* Worlds & Biomes Manager */}
       <MapManagerModal
         isOpen={isMapManagerOpen}
-        currentMapName={mapName}
         savedMaps={savedMaps}
         trashedMaps={trashedMaps}
         onClose={() => setIsMapManagerOpen(false)}
-        onSaveMap={handleSaveMap}
         onLoadMap={(map) => handleLoadMap(map, true)}
         onCreateBiomeMap={(tpl, name) => handleCreateBiomeMap(tpl, name, true)}
+        onCreateCustomBiome={(cfg) => handleCreateCustomBiome(cfg, true)}
         onDeleteSavedMap={handleDeleteSavedMap}
         onRestoreTrashedMap={handleRestoreTrashedMap}
         onPermanentDeleteTrashedMap={handlePermanentDeleteTrashedMap}
@@ -1874,19 +1936,20 @@ export default function App() {
       <PauseModal
         isOpen={gameState === 'PAUSED'}
         mapName={mapName}
-        justSaved={justSaved}
         onResume={() => {
           soundEngine.playUiTick();
           setGameState('PLAYING');
         }}
-        onSaveChanges={handleSaveChanges}
         onOpenMapManager={() => {
+          persistCurrentRuntimeMap();
+          setSavedMaps(loadSavedMapsFromStorage());
           setGameState('PLAYING');
           setIsMapManagerOpen(true);
         }}
         onReturnToTitle={() => {
           soundEngine.playUiTick();
           persistCurrentRuntimeMap();
+          setSavedMaps(loadSavedMapsFromStorage());
           setSelection(null);
           setSelectedCarId(null);
           setTutorialStep(null);

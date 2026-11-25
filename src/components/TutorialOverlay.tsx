@@ -21,8 +21,172 @@ export type TutorialHighlightTarget =
   | 'clock_day'
   | 'permits_news'
   | 'map_traffic_music'
-  | 'hide_ui_save'
+  | 'hide_ui_refresh'
   | null;
+
+export interface GuideBookStep {
+  step: TutorialStep;
+  title: string;
+  items: { label?: string; text: string; tone?: 'amber' | 'sky' | 'rose' | 'emerald' | 'teal' | 'white' }[];
+}
+
+export const GUIDE_BOOK_STEPS: GuideBookStep[] = [
+  {
+    step: 1,
+    title: 'Add City Hall',
+    items: [
+      {
+        text: 'Tap City Hall below, then click an empty green tile by a road.',
+        tone: 'amber',
+      },
+    ],
+  },
+  {
+    step: 2,
+    title: 'Click Into City Hall',
+    items: [
+      {
+        text: 'Click your City Hall on the map (or tap City Hall Go / Map F) to open it.',
+        tone: 'amber',
+      },
+    ],
+  },
+  {
+    step: 3,
+    title: 'City Hall Chaos & Tools',
+    items: [
+      {
+        label: 'Permits & Events:',
+        text: 'Approve builds or throw Weddings & Celebrations.',
+        tone: 'amber',
+      },
+      {
+        label: 'Chaos & Disasters:',
+        text: 'Nuke, Earthquake, Tornado, Flood, War, Virus, Pollution & Protests (disasters also strike naturally!).',
+        tone: 'rose',
+      },
+    ],
+  },
+  {
+    step: 4,
+    title: 'People Inside, Name & Alerts',
+    items: [
+      {
+        label: 'People Inside:',
+        text: 'Click any building to see live count / max capacity as cars & walkers visit.',
+        tone: 'amber',
+      },
+      {
+        label: 'Edit Name & Alerts:',
+        text: 'Click the building name to rename it, or trigger a Robbery or Fire call.',
+        tone: 'sky',
+      },
+    ],
+  },
+  {
+    step: 5,
+    title: 'Click a Car to Track It',
+    items: [
+      {
+        text: 'With Select (V), click any moving car on a road to see where it is going.',
+        tone: 'amber',
+      },
+    ],
+  },
+  {
+    step: 6,
+    title: 'Speed Up Time',
+    items: [
+      {
+        text: 'Top-left bar: click 3× or 8× to speed up time (Space pauses/resumes).',
+        tone: 'amber',
+      },
+    ],
+  },
+  {
+    step: 7,
+    title: 'Day, Seasons, Weather & Land',
+    items: [
+      {
+        label: 'Hours:',
+        text: 'Shops open 06:00–22:00; schools run Mon–Fri 08:00–16:00.',
+        tone: 'amber',
+      },
+      {
+        label: 'Seasons & Land:',
+        text: 'Changes every 10 days (+100 Land via L; click Land to pick 1×1–5×5 fill size).',
+        tone: 'emerald',
+      },
+      {
+        label: 'Weather:',
+        text: 'Sunny, Rain, Storm, Windy trees & Foggy crashes. Click to preview!',
+        tone: 'sky',
+      },
+    ],
+  },
+  {
+    step: 8,
+    title: 'Permits & News',
+    items: [
+      {
+        label: 'Permits:',
+        text: 'Citizens propose buildings (with location & build time) — Allow or Decline.',
+        tone: 'amber',
+      },
+      {
+        label: 'News:',
+        text: 'Snap a daily photo (UI auto-hides), crop & publish as the paperboy delivers and citizens comment.',
+        tone: 'amber',
+      },
+    ],
+  },
+  {
+    step: 9,
+    title: 'Map, Traffic & Music',
+    items: [
+      {
+        label: 'Map (F):',
+        text: 'Search and jump straight to any building or alert.',
+        tone: 'sky',
+      },
+      {
+        label: 'Traffic (T):',
+        text: 'Show live road congestion colors.',
+        tone: 'amber',
+      },
+      {
+        label: 'Music & Sound:',
+        text: 'Toggle relaxing lo-fi music or mute SFX anytime.',
+        tone: 'teal',
+      },
+    ],
+  },
+  {
+    step: 10,
+    title: 'Hide/Show UI, Refresh & Auto-Save',
+    items: [
+      {
+        label: 'Hide / Show UI (H):',
+        text: 'Hide all bars for a clean view; tap Show UI anytime.',
+        tone: 'white',
+      },
+      {
+        label: 'Refresh & Auto-Save:',
+        text: 'Refresh clears lag without restarting. Your city auto-saves automatically as you play and before you leave!',
+        tone: 'emerald',
+      },
+    ],
+  },
+];
+
+const TONE_CLASSES: Record<NonNullable<GuideBookStep['items'][number]['tone']>, string> = {
+  amber: 'text-amber-300',
+  sky: 'text-sky-300',
+  rose: 'text-rose-300',
+  emerald: 'text-emerald-300',
+  teal: 'text-teal-300',
+  white: 'text-white',
+};
 
 interface TutorialOverlayProps {
   step: TutorialStep;
@@ -67,7 +231,8 @@ export function TutorialOverlay({
   onPrevStep,
   onCloseTutorial,
 }: TutorialOverlayProps) {
-  const totalSteps = 10;
+  const totalSteps = GUIDE_BOOK_STEPS.length;
+  const activeStep = GUIDE_BOOK_STEPS[step - 1];
 
   return (
     <div className="absolute bottom-24 left-[max(0.875rem,env(safe-area-inset-left))] z-30 w-[min(20.5rem,calc(100vw-1.75rem))] pointer-events-auto">
@@ -82,18 +247,7 @@ export function TutorialOverlay({
               <div className="text-[10px] font-mono-tabular uppercase tracking-wider text-amber-300 font-semibold">
                 Step {step} / {totalSteps}
               </div>
-              <div className="text-xs font-bold text-white truncate">
-                {step === 1 && 'Add City Hall'}
-                {step === 2 && 'Click Into City Hall'}
-                {step === 3 && 'City Hall Chaos & Tools'}
-                {step === 4 && 'People Inside & Edit Name'}
-                {step === 5 && 'Click a Car to Track It'}
-                {step === 6 && 'Speed Up Time'}
-                {step === 7 && 'Day, Seasons & Weather'}
-                {step === 8 && 'Permits & News'}
-                {step === 9 && 'Map, Traffic & Music'}
-                {step === 10 && 'Hide/Show UI & Save'}
-              </div>
+              <div className="text-xs font-bold text-white truncate">{activeStep.title}</div>
             </div>
           </div>
           <button
@@ -115,192 +269,109 @@ export function TutorialOverlay({
           />
         </div>
 
-        {/* Short Step Body */}
+        {/* Short Step Body (synced with Guide Book) */}
         <div className="p-3 space-y-2 text-xs leading-snug text-slate-300">
+          {step === 7 && (
+            <p className="font-mono-tabular text-[11px] text-amber-200 font-semibold">
+              {formattedTime} · {dayOfWeek} · Day {dayCount} · {season} · {weather}
+            </p>
+          )}
+
+          {activeStep.items.length === 1 && !activeStep.items[0].label ? (
+            <p>{activeStep.items[0].text}</p>
+          ) : (
+            <ul className="space-y-1 bg-slate-900/80 border border-slate-800 rounded-lg p-2 text-[11px]">
+              {activeStep.items.map((item, idx) => (
+                <li key={idx}>
+                  {item.label && (
+                    <span className={`font-semibold ${TONE_CLASSES[item.tone || 'amber']} mr-1`}>
+                      {item.label}
+                    </span>
+                  )}
+                  <span>{item.text}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+
           {step === 1 && (
-            <>
-              <p>
-                Tap <span className="font-semibold text-amber-300">City Hall</span> below, then click an empty green tile by a road.
-              </p>
-              <div className="flex items-center justify-between gap-2 bg-slate-900/80 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px]">
-                <span className="flex items-center gap-1.5">
-                  <Landmark className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                  {hasCityHall
-                    ? 'Built!'
-                    : isCityHallToolActive
-                    ? 'Click a green tile'
-                    : 'Pick City Hall'}
-                </span>
-                {!hasCityHall && !isCityHallToolActive && (
-                  <button
-                    type="button"
-                    onClick={onSelectCityHallTool}
-                    className="px-2 py-0.5 rounded bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold whitespace-nowrap shrink-0"
-                  >
-                    Pick Tool
-                  </button>
-                )}
-              </div>
-            </>
+            <div className="flex items-center justify-between gap-2 bg-slate-900/80 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px]">
+              <span className="flex items-center gap-1.5">
+                <Landmark className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                {hasCityHall
+                  ? 'Built!'
+                  : isCityHallToolActive
+                  ? 'Click a green tile'
+                  : 'Pick City Hall'}
+              </span>
+              {!hasCityHall && !isCityHallToolActive && (
+                <button
+                  type="button"
+                  onClick={onSelectCityHallTool}
+                  className="px-2 py-0.5 rounded bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold whitespace-nowrap shrink-0"
+                >
+                  Pick Tool
+                </button>
+              )}
+            </div>
           )}
 
           {step === 2 && (
-            <>
-              <p>
-                Click your new <span className="font-semibold text-amber-300">City Hall</span> on the map (or tap <span className="font-semibold text-amber-300">City Hall Go</span> below).
-              </p>
-              <div className="flex items-center justify-between gap-2 bg-slate-900/80 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px]">
-                <span className="flex items-center gap-1.5">
-                  <MousePointerClick className="w-3.5 h-3.5 text-sky-300 shrink-0" />
-                  {isCityHallSelected ? 'Opened!' : 'Open City Hall'}
-                </span>
-                <button
-                  type="button"
-                  onClick={onFocusCityHall}
-                  className="px-2 py-0.5 rounded bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold whitespace-nowrap shrink-0"
-                >
-                  Open Now
-                </button>
-              </div>
-            </>
-          )}
-
-          {step === 3 && (
-            <>
-              <p>City Hall (on the right) holds all your chaos &amp; civic powers:</p>
-              <ul className="space-y-1 bg-slate-900/80 border border-slate-800 rounded-lg p-2 text-[11px]">
-                <li>
-                  <span className="font-semibold text-amber-300">Permits &amp; Events:</span> Approve builds or throw Weddings &amp; Celebrations.
-                </li>
-                <li>
-                  <span className="font-semibold text-rose-300">Chaos:</span> Nuke, Earthquake, Tornado, Flood, War, Virus, Pollution &amp; Protests.
-                </li>
-              </ul>
-            </>
-          )}
-
-          {step === 4 && (
-            <>
-              <p>Click any building to see inside &amp; customize it:</p>
-              <ul className="space-y-1 bg-slate-900/80 border border-slate-800 rounded-lg p-2 text-[11px]">
-                <li>
-                  <span className="font-semibold text-amber-300">People Inside:</span> Live count / max capacity (updates as cars &amp; walkers enter/leave).
-                </li>
-                <li>
-                  <span className="font-semibold text-sky-300">Edit Name:</span> Click the building&apos;s name at the top of its panel to rename it!
-                </li>
-              </ul>
-            </>
+            <div className="flex items-center justify-between gap-2 bg-slate-900/80 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px]">
+              <span className="flex items-center gap-1.5">
+                <MousePointerClick className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+                {isCityHallSelected ? 'Opened!' : 'Open City Hall'}
+              </span>
+              <button
+                type="button"
+                onClick={onFocusCityHall}
+                className="px-2 py-0.5 rounded bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold whitespace-nowrap shrink-0"
+              >
+                Open Now
+              </button>
+            </div>
           )}
 
           {step === 5 && (
-            <>
-              <p>
-                With <span className="font-semibold text-amber-300">Select (V)</span>, click any moving <span className="font-semibold text-amber-300">car</span> on a road to see where it&apos;s going!
-              </p>
-              <div className="flex items-center justify-between gap-2 bg-slate-900/80 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px]">
-                <span className="flex items-center gap-1.5 truncate">
-                  <Car className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                  <span className="truncate">
-                    {hasSelectedCar && selectedCarDest
-                      ? `Heading → ${selectedCarDest}`
-                      : 'Click a car on a road'}
-                  </span>
+            <div className="flex items-center justify-between gap-2 bg-slate-900/80 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px]">
+              <span className="flex items-center gap-1.5 truncate">
+                <Car className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                <span className="truncate">
+                  {hasSelectedCar && selectedCarDest
+                    ? `Heading → ${selectedCarDest}`
+                    : 'Click a car on a road'}
                 </span>
-                <button
-                  type="button"
-                  onClick={onSelectSelectTool}
-                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 font-semibold whitespace-nowrap shrink-0"
-                >
-                  Select Tool
-                </button>
-              </div>
-            </>
+              </span>
+              <button
+                type="button"
+                onClick={onSelectSelectTool}
+                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300 font-semibold whitespace-nowrap shrink-0"
+              >
+                Select Tool
+              </button>
+            </div>
           )}
 
           {step === 6 && (
-            <>
-              <p>
-                Top-left bar: click <span className="font-semibold text-amber-300">3×</span> or <span className="font-semibold text-amber-300">8×</span> to speed up time!
-              </p>
-              <div className="flex items-center justify-between gap-2 bg-slate-900/80 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px]">
-                <span className="flex items-center gap-1.5">
-                  <Gauge className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-                  Speed: <span className="font-mono-tabular font-semibold text-white">{timeScale}×</span>
-                </span>
-                {timeScale === 1 && (
-                  <button
-                    type="button"
-                    onClick={() => onSetTimeScale(3)}
-                    className="px-2 py-0.5 rounded bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold whitespace-nowrap shrink-0"
-                  >
-                    Try 3×
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-
-          {step === 7 && (
-            <>
-              <p>
-                Top-left bar (<span className="font-mono-tabular text-amber-200 font-semibold">{formattedTime} · {dayOfWeek} · Day {dayCount}</span>):
-              </p>
-              <ul className="space-y-1 bg-slate-900/80 border border-slate-800 rounded-lg p-2 text-[11px]">
-                <li>
-                  <span className="font-semibold text-amber-200">Day &amp; Hours:</span> Auto-saves! Shops 06:00–22:00, school 08:00–16:00.
-                </li>
-                <li>
-                  <span className="font-semibold text-emerald-300">Seasons ({season}):</span> Changes every 10 days (+100 Land via <span className="font-mono-tabular">L</span>).
-                </li>
-                <li>
-                  <span className="font-semibold text-sky-300">Weather ({weather}):</span> Sunny, Rain, Windy trees &amp; Foggy crashes. Click to preview!
-                </li>
-              </ul>
-            </>
-          )}
-
-          {step === 8 && (
-            <>
-              <p>Top-right Mayor actions:</p>
-              <ul className="space-y-1 bg-slate-900/80 border border-slate-800 rounded-lg p-2 text-[11px]">
-                <li>
-                  <span className="font-semibold text-amber-300">Permits:</span> Citizens propose buildings (with location &amp; build time) — Allow or Decline!
-                </li>
-                <li>
-                  <span className="font-semibold text-amber-300">News:</span> Snap &amp; crop a photo once a day, publish, and watch the paperboy deliver as citizens comment!
-                </li>
-              </ul>
-            </>
-          )}
-
-          {step === 9 && (
-            <>
-              <p>Top-right lookup, traffic &amp; audio:</p>
-              <ul className="space-y-1 bg-slate-900/80 border border-slate-800 rounded-lg p-2 text-[11px]">
-                <li>
-                  <span className="font-semibold text-sky-300">Map (F):</span> Search and jump straight to any building or alert.
-                </li>
-                <li>
-                  <span className="font-semibold text-amber-300">Traffic (T):</span> Show live road congestion colors.
-                </li>
-                <li>
-                  <span className="font-semibold text-teal-300">Music &amp; Sound:</span> Toggle relaxing lo-fi music or mute SFX.
-                </li>
-              </ul>
-            </>
+            <div className="flex items-center justify-between gap-2 bg-slate-900/80 border border-slate-800 rounded-lg px-2.5 py-1.5 text-[11px]">
+              <span className="flex items-center gap-1.5">
+                <Gauge className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                Speed: <span className="font-mono-tabular font-semibold text-white">{timeScale}×</span>
+              </span>
+              {timeScale === 1 && (
+                <button
+                  type="button"
+                  onClick={() => onSetTimeScale(3)}
+                  className="px-2 py-0.5 rounded bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold whitespace-nowrap shrink-0"
+                >
+                  Try 3×
+                </button>
+              )}
+            </div>
           )}
 
           {step === 10 && (
             <>
-              <ul className="space-y-1 bg-slate-900/80 border border-slate-800 rounded-lg p-2 text-[11px]">
-                <li>
-                  <span className="font-semibold text-white">Hide / Show UI (H):</span> Hide all bars for a clean view; tap <span className="text-amber-300">Show UI</span> anytime.
-                </li>
-                <li>
-                  <span className="font-semibold text-emerald-300">Save &amp; Refresh:</span> Save your town or clear lag without restarting.
-                </li>
-              </ul>
               <div className="flex items-center gap-2 bg-emerald-950/50 border border-emerald-500/40 rounded-lg p-2 text-[11px] text-emerald-100">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span>You&apos;re ready to run your town!</span>

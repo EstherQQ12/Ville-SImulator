@@ -1,5 +1,9 @@
 export const GRID_COLS = 34;
 export const GRID_ROWS = 22;
+export const MIN_BIOME_COLS = 18;
+export const MAX_BIOME_COLS = 52;
+export const MIN_BIOME_ROWS = 14;
+export const MAX_BIOME_ROWS = 34;
 export const TILE_SIZE = 48;
 export const ICON_SIZE = 20;
 
@@ -38,7 +42,21 @@ export type BuildingCategory =
 
 export type TerrainType = 'grass' | 'water' | 'forest' | 'sand' | 'void';
 
-export type MapTemplateKind = 'valley' | 'island' | 'archipelago' | 'jungle' | 'river' | 'pond';
+export type MapTemplateKind = 'valley' | 'island' | 'archipelago' | 'jungle' | 'river' | 'pond' | 'custom';
+
+export type BiomeWaterStyle = 'none' | 'river' | 'pond' | 'island' | 'archipelago';
+
+export interface CustomBiomeConfig {
+  name?: string;
+  cols: number;
+  rows: number;
+  baseGround: 'grass' | 'sand';
+  waterStyle: BiomeWaterStyle;
+  waterAmount: number;
+  forestDensity: number;
+  sandAmount: number;
+  seed: number;
+}
 
 export type TimePhase = 'Dawn' | 'Day' | 'Dusk' | 'Night';
 
@@ -775,7 +793,6 @@ export interface SimulationStats {
   citizenHappiness: number;
   happinessMood: HappinessMood;
   happinessSummary: string;
-  economyScore: number;
   totalLawsuits: number;
   hasCityHall: boolean;
   prisonInmates: number;
@@ -835,7 +852,6 @@ export interface SavedSimState {
   totalReleased?: number;
   totalLawsuits?: number;
   citizenHappiness?: number;
-  economyScore?: number;
   pendingProposals?: ConstructionProposal[];
   activeConstructions?: ActiveConstruction[];
 }

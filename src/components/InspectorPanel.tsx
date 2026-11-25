@@ -67,7 +67,6 @@ interface InspectorPanelProps {
   pendingProposalsCount: number;
   crises: CityCrisisState;
   cratersCount: number;
-  economyScore: number;
   totalLawsuits: number;
   prisonInmates: number;
   totalJailed: number;
@@ -124,7 +123,6 @@ export function InspectorPanel({
   pendingProposalsCount,
   crises,
   cratersCount,
-  economyScore,
   totalLawsuits,
   prisonInmates,
   totalJailed,
@@ -352,18 +350,19 @@ export function InspectorPanel({
             <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-2.5">
               <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium mb-1.5">
                 <span>City Chaos</span>
-                <span className="font-mono-tabular text-slate-300">
-                  Econ {economyScore}%
-                  {totalLawsuits > 0 ? (
-                    <span className="text-rose-400"> · {totalLawsuits} Sued</span>
-                  ) : null}
-                  {basementCount > 0 ? (
-                    <span className="text-emerald-300"> · {basementCount} Bunkers</span>
-                  ) : null}
-                  {cratersCount > 0 ? (
-                    <span className="text-orange-400"> · {cratersCount} Craters</span>
-                  ) : null}
-                </span>
+                {(totalLawsuits > 0 || basementCount > 0 || cratersCount > 0) && (
+                  <span className="font-mono-tabular flex items-center gap-1.5">
+                    {totalLawsuits > 0 ? (
+                      <span className="text-rose-400">{totalLawsuits} Sued</span>
+                    ) : null}
+                    {basementCount > 0 ? (
+                      <span className="text-emerald-300">{basementCount} Bunkers</span>
+                    ) : null}
+                    {cratersCount > 0 ? (
+                      <span className="text-orange-400">{cratersCount} Craters</span>
+                    ) : null}
+                  </span>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-1.5">
                 <button
@@ -624,7 +623,7 @@ export function InspectorPanel({
             <div className="min-w-0">
               <div className="font-semibold text-white">Industrial Plant</div>
               <div className="text-[11px] text-slate-400">
-                Boosts city economy &amp; dispatches delivery vans, while smokestacks gradually increase air pollution.
+                Dispatches delivery vans &amp; cargo, while smokestacks gradually increase air pollution.
               </div>
             </div>
           </div>
@@ -647,7 +646,7 @@ export function InspectorPanel({
                 </span>
               </div>
               <div className="text-[11px] text-slate-400">
-                Farmers tend &amp; harvest ripe crops to feed citizens and boost the local economy.
+                Farmers tend &amp; harvest ripe crops to feed citizens and supply fresh produce.
               </div>
             </div>
           </div>
@@ -1063,7 +1062,7 @@ export function InspectorPanel({
             <div className="min-w-0">
               <div className="font-semibold text-white">Polluted Water Catch</div>
               <div className="text-[11px] text-rose-200">
-                Infected fish spreads virus, triggers lawsuits, and drops city economy.
+                Infected fish spreads virus and triggers citizen lawsuits.
               </div>
             </div>
           </div>

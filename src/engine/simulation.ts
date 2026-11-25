@@ -202,7 +202,6 @@ export class CitySimulation {
 
   public citizenHappiness = 76;
   public happinessSummary = 'Balanced city mood';
-  public economyScore = 82;
   public totalLawsuits = 0;
   private lawsuitShock = 0;
   public readonly CHAOS_COOLDOWN_SECONDS = 300; // 5 minutes
@@ -278,6 +277,8 @@ export class CitySimulation {
   private floodDrownAccumulator = 0;
   private floodDrownCount = 0;
   private floodNewsLogged = false;
+  private naturalDisasterAccumulator = 42;
+  private naturalDisasterCooldown = 120;
   private lastSchoolBellKey = '';
   private lastFestivalDay = -3;
   private lastCeremonyDay = -3;
@@ -517,7 +518,6 @@ export class CitySimulation {
     this.mayorAlive = true;
     this.electionActive = false;
     this.electionRemaining = 0;
-    this.economyScore = 82;
     this.totalLawsuits = 0;
     this.lawsuitShock = 0;
     this.deforestationPressure = 0;
@@ -558,6 +558,8 @@ export class CitySimulation {
     this.farmerButcherAccumulator = 6;
     this.butcherMeatReserve = 0;
     this.basementSpreadAccumulator = 0;
+    this.naturalDisasterAccumulator = 42;
+    this.naturalDisasterCooldown = 120;
     this.lastFestivalDay = -3;
     this.lastCeremonyDay = -3;
     this.dayCount = 1;
@@ -664,7 +666,6 @@ export class CitySimulation {
       this.totalReleased = savedState.totalReleased ?? 0;
       this.totalLawsuits = savedState.totalLawsuits ?? 0;
       this.citizenHappiness = savedState.citizenHappiness ?? 76;
-      this.economyScore = savedState.economyScore ?? 82;
       this.pendingProposals = savedState.pendingProposals
         ? savedState.pendingProposals.map((pr) => ({ ...pr, iconGrid: [...pr.iconGrid] }))
         : [];
@@ -740,7 +741,6 @@ export class CitySimulation {
       totalReleased: this.totalReleased,
       totalLawsuits: this.totalLawsuits,
       citizenHappiness: this.citizenHappiness,
-      economyScore: this.economyScore,
       pendingProposals: this.pendingProposals.map((pr) => ({ ...pr, iconGrid: [...pr.iconGrid] })),
       activeConstructions: this.activeConstructions.map((ac) => ({ ...ac, iconGrid: [...ac.iconGrid] })),
     };
@@ -1031,23 +1031,9 @@ export class CitySimulation {
     return Boolean(tile && tile.terrain !== 'void' && !tile.isDefaultLand);
   }
 
-  public applyExpansionLand(
-    x: number,
-    y: number,
-    mode: 'toggle' | 'add' | 'remove' = 'toggle'
-  ): boolean {
+  private removeExpansionLandTileNoRebuild(x: number, y: number): boolean {
     const tile = this.getTile(x, y);
-    if (!tile) return false;
-    if (tile.terrain === 'void') {
-      if (mode === 'remove' || !this.canPlaceExpansionLandAt(x, y)) return false;
-      tile.terrain = 'grass';
-      tile.isDefaultLand = false;
-      this.expansionCredits = Math.max(0, this.expansionCredits - 1);
-      this.rebuildCaches();
-      return true;
-    }
-    if (mode === 'add' || tile.isDefaultLand) return false;
-    // Remove custom expanded tile back into expandable void & refund 1 credit
+    if (!tile || tile.terrain === 'void' || tile.isDefaultLand) return false;
     tile.building = null;
     tile.hasRoad = false;
     tile.hasZebraCrossing = false;
@@ -1073,8 +1059,116 @@ export class CitySimulation {
     tile.terrain = 'void';
     tile.isDefaultLand = false;
     this.expansionCredits += 1;
-    this.rebuildCaches();
     return true;
+  }
+
+  public applyExpansionLand(
+    x: number,
+    y: number,
+    mode: 'toggle' | 'add' | 'remove' = 'toggle'
+  ): boolean {
+    const tile = this.getTile(x, y);
+    if (!tile) return false;
+    if (tile.terrain === 'void') {
+      if (mode === 'remove' || !this.canPlaceExpansionLandAt(x, y)) return false;
+      tile.terrain = 'grass';
+      tile.isDefaultLand = false;
+      this.expansionCredits = Math.max(0, this.expansionCredits - 1);
+      this.rebuildCaches();
+      return true;
+    }
+    if (mode === 'add' || tile.isDefaultLand) return false;
+    const removed = this.removeExpansionLandTileNoRebuild(x, y);
+    if (removed) {
+      this.rebuildCaches();
+    }
+    return removed;
+  }
+
+  public applyExpansionLandBrush(
+    cx: number,
+    cy: number,
+    brushSize: number,
+    mode: 'add' | 'remove' = 'add'
+  ): {
+    changedCount: number;
+    affectedTiles: { x: number; y: number }[];
+    outOfCredits: boolean;
+    lockedOriginalOnly: boolean;
+  } {
+    const size = Math.max(1, Math.min(5, Math.floor(brushSize || 1)));
+    const start = -Math.floor((size - 1) / 2);
+    const end = start + size - 1;
+    const affectedTiles: { x: number; y: number }[] = [];
+    let outOfCredits = false;
+    let sawLockedOriginal = false;
+
+    if (mode === 'add') {
+      // Run wavefront passes so multi-tile brushes chain cleanly from existing land outward
+      for (let pass = 0; pass < size; pass++) {
+        let passAdded = 0;
+        for (let dy = start; dy <= end; dy++) {
+          for (let dx = start; dx <= end; dx++) {
+            if (this.expansionCredits <= 0) {
+              outOfCredits = true;
+              break;
+            }
+            const tx = cx + dx;
+            const ty = cy + dy;
+            const tile = this.getTile(tx, ty);
+            if (!tile || tile.terrain !== 'void') continue;
+            if (!this.canPlaceExpansionLandAt(tx, ty)) continue;
+            tile.terrain = 'grass';
+            tile.isDefaultLand = false;
+            this.expansionCredits = Math.max(0, this.expansionCredits - 1);
+            affectedTiles.push({ x: tx, y: ty });
+            passAdded++;
+          }
+          if (this.expansionCredits <= 0) break;
+        }
+        if (passAdded === 0 || this.expansionCredits <= 0) break;
+      }
+
+      if (this.expansionCredits <= 0) {
+        for (let dy = start; dy <= end; dy++) {
+          for (let dx = start; dx <= end; dx++) {
+            const tile = this.getTile(cx + dx, cy + dy);
+            if (tile && tile.terrain === 'void') {
+              outOfCredits = true;
+              break;
+            }
+          }
+          if (outOfCredits) break;
+        }
+      }
+    } else {
+      for (let dy = start; dy <= end; dy++) {
+        for (let dx = start; dx <= end; dx++) {
+          const tx = cx + dx;
+          const ty = cy + dy;
+          const tile = this.getTile(tx, ty);
+          if (!tile || tile.terrain === 'void') continue;
+          if (tile.isDefaultLand) {
+            sawLockedOriginal = true;
+            continue;
+          }
+          if (this.removeExpansionLandTileNoRebuild(tx, ty)) {
+            affectedTiles.push({ x: tx, y: ty });
+          }
+        }
+      }
+    }
+
+    if (affectedTiles.length > 0) {
+      this.rebuildCaches();
+    }
+
+    return {
+      changedCount: affectedTiles.length,
+      affectedTiles,
+      outOfCredits,
+      lockedOriginalOnly: affectedTiles.length === 0 && sawLockedOriginal,
+    };
   }
 
   private checkExpansionMilestone() {
@@ -1952,12 +2046,11 @@ export class CitySimulation {
     // Step Car Crashes & Emergency Responders
     this.updateCarCrashes(simDt, simDt, playAudio);
 
-    // Step Seasons, Weather, Seasonal Particles, Broken Bridges, Economy & Citizen Happiness
+    // Step Seasons, Weather, Seasonal Particles, Broken Bridges & Citizen Happiness
     this.updateWeather(simDt, simDt);
     this.updateSeasonalParticlesAndIndoorMood(simDt, simDt);
     this.updateBrokenBridges(simDt, simDt, playAudio);
-    this.updateEconomy(simDt, simDt);
-    this.updateCitizenHappiness(simDt);
+    this.updateCitizenHappiness(simDt, simDt);
 
     // Step cars physics (including occasional car-vs-pedestrian impacts)
     this.carPedHitCooldown = Math.max(0, this.carPedHitCooldown - simDt);
@@ -4460,7 +4553,6 @@ export class CitySimulation {
                   if (spread >= 2) break;
                 }
               }
-              this.economyScore = Math.max(5, this.economyScore - 3.0);
               this.floatingLabels.push({
                 wx: splashX,
                 wy: splashY - 6,
@@ -4702,7 +4794,6 @@ export class CitySimulation {
                 }
                 this.totalLawsuits += 1;
                 this.lawsuitShock = Math.min(36, this.lawsuitShock + 9);
-                this.economyScore = Math.max(5, this.economyScore - 5.5);
                 stall.stock = Math.max(0, stall.stock - 2);
                 this.floatingLabels.push({
                   wx: stall.wx,
@@ -4730,7 +4821,6 @@ export class CitySimulation {
                   }
                 }
               } else {
-                this.economyScore = Math.min(100, this.economyScore + 0.35);
                 const saleText =
                   stall.goods === 'fish'
                     ? 'Bought Fish!'
@@ -4783,7 +4873,6 @@ export class CitySimulation {
               }
               this.totalLawsuits += 1;
               this.lawsuitShock = Math.min(36, this.lawsuitShock + 7);
-              this.economyScore = Math.max(5, this.economyScore - 4.5);
               this.floatingLabels.push({
                 wx: (shop.x + 0.5) * TILE_SIZE,
                 wy: (shop.y + 0.25) * TILE_SIZE,
@@ -4794,8 +4883,6 @@ export class CitySimulation {
                 maxAge: 1.9,
               });
               if (playAudio) soundEngine.playCrisisAlert();
-            } else {
-              this.economyScore = Math.min(100, this.economyScore + 0.2);
             }
             p.state = 'shopping';
             p.holdTimer = 2.0 + Math.random() * 1.4;
@@ -5673,7 +5760,6 @@ export class CitySimulation {
         } else if (esc.destBuildingId) {
           const bld = this.buildingsList.find((b) => b.id === esc.destBuildingId);
           if (bld) {
-            this.economyScore = Math.max(5, this.economyScore - 3.5);
             this.citizenHappiness = Math.max(5, this.citizenHappiness - 2.5);
             if (bld.category === 'park' || Math.random() < 0.35) {
               this.startFireAt(bld.x, bld.y, true, playAudio);
@@ -6797,7 +6883,11 @@ export class CitySimulation {
     return true;
   }
 
-  public triggerDisaster(type: 'tornado' | 'earthquake' | 'flood', playAudio = true): boolean {
+  public triggerDisaster(
+    type: 'tornado' | 'earthquake' | 'flood',
+    playAudio = true,
+    isNatural = false
+  ): boolean {
     if (this.chaosCooldowns[type] > 0) return false;
     this.chaosCooldowns[type] = this.CHAOS_COOLDOWN_SECONDS;
 
@@ -6815,13 +6905,17 @@ export class CitySimulation {
       this.floatingLabels.push({
         wx: this.crises.tornadoWx,
         wy: this.crises.tornadoWy - 14,
-        text: 'TORNADO WARNING!',
+        text: isNatural ? 'NATURAL TORNADO!' : 'TORNADO WARNING!',
         color: '#FEF2F2',
         bgColor: '#475569',
         age: 0,
         maxAge: 2.5,
       });
-      this.logDailyNews('TWISTER ALERT: A destructive tornado touched down, tearing through buildings, trees, and roads in its path!');
+      this.logDailyNews(
+        isNatural
+          ? `NATURE ALERT: A sudden natural tornado touched down during ${this.weather.toLowerCase()} ${this.season.toLowerCase()} weather, tearing across town!`
+          : 'TWISTER ALERT: A destructive tornado touched down, tearing through buildings, trees, and roads in its path!'
+      );
     } else if (type === 'earthquake') {
       this.crises.earthquakeActive = true;
       this.crises.earthquakeRemaining = 14;
@@ -6926,7 +7020,13 @@ export class CitySimulation {
       this.floatingLabels.push({
         wx: ((riftOrigin?.x ?? this.gridCols / 2) + 0.5) * TILE_SIZE,
         wy: ((riftOrigin?.y ?? this.gridRows / 2) + 0.4) * TILE_SIZE,
-        text: splitCount > 0 ? 'EARTHQUAKE RIFT!' : 'EARTHQUAKE!',
+        text: splitCount > 0
+          ? isNatural
+            ? 'NATURAL QUAKE RIFT!'
+            : 'EARTHQUAKE RIFT!'
+          : isNatural
+          ? 'NATURAL EARTHQUAKE!'
+          : 'EARTHQUAKE!',
         color: '#FEF2F2',
         bgColor: '#92400E',
         age: 0,
@@ -6934,8 +7034,8 @@ export class CitySimulation {
       });
       this.logDailyNews(
         splitCount > 0
-          ? `EARTHQUAKE RIFT: The ground split apart across ${splitCount} tiles, opening a water chasm through town!`
-          : 'EARTHQUAKE! Tremors cracked bridges and buckled streets across town.'
+          ? `${isNatural ? 'NATURAL EARTHQUAKE' : 'EARTHQUAKE RIFT'}: The ground split apart across ${splitCount} tiles, opening a water chasm through town!`
+          : `${isNatural ? 'NATURAL EARTHQUAKE' : 'EARTHQUAKE'}! Tremors cracked bridges and buckled streets across town.`
       );
     } else if (type === 'flood') {
       this.crises.floodActive = true;
@@ -7034,13 +7134,17 @@ export class CitySimulation {
       this.floatingLabels.push({
         wx: (this.gridCols * TILE_SIZE) * 0.5,
         wy: (this.gridRows * TILE_SIZE) * 0.42,
-        text: 'CITYWIDE FLOOD!',
+        text: isNatural ? 'NATURAL FLASH FLOOD!' : 'CITYWIDE FLOOD!',
         color: '#E0F2FE',
         bgColor: '#0369A1',
         age: 0,
         maxAge: 2.8,
       });
-      this.logDailyNews('CITYWIDE FLOOD: Deep floodwaters submerged the entire city—citizens are climbing tall buildings to stay above water!');
+      this.logDailyNews(
+        isNatural
+          ? `NATURAL FLOOD: Heavy ${this.weather.toLowerCase()} floodwaters submerged the city—citizens are climbing tall buildings to stay above water!`
+          : 'CITYWIDE FLOOD: Deep floodwaters submerged the entire city—citizens are climbing tall buildings to stay above water!'
+      );
     }
 
     if (playAudio) soundEngine.playDisasterRumble();
@@ -7700,78 +7804,8 @@ export class CitySimulation {
     return 'Miserable';
   }
 
-  private updateEconomy(simDt: number, realDt: number) {
+  private updateCitizenHappiness(simDt: number, realDt: number) {
     this.lawsuitShock = Math.max(0, this.lawsuitShock - simDt * 0.25);
-
-    let businesses = 0;
-    let workplaces = 0;
-    let factories = 0;
-    let cropsCount = 0;
-    for (const b of this.buildingsList) {
-      if (b.category === 'commercial' || b.category === 'visit_spot' || b.category === 'landmark') {
-        businesses++;
-      } else if (b.category === 'workplace') {
-        workplaces++;
-      } else if (b.category === 'factory') {
-        factories++;
-      } else if (b.category === 'crops') {
-        cropsCount++;
-      }
-    }
-
-    let totalSpeedRatio = 0;
-    let jammedCars = 0;
-    for (const c of this.cars) {
-      if (c.isJammed) jammedCars++;
-      totalSpeedRatio += c.speed / c.maxSpeed;
-    }
-    const flowPct = this.cars.length === 0 ? 100 : (totalSpeedRatio / this.cars.length) * 100;
-
-    const cleanFishStalls = this.marketStalls.filter((s) => !s.isContaminated).length;
-    const taintedStalls = this.marketStalls.filter((s) => s.isContaminated).length;
-
-    const cropMult = this.crises.pollutionLevel >= 35 ? 0.5 : 1.0;
-    const businessBoost = Math.min(
-      32,
-      businesses * 2.5 + workplaces * 3.0 + factories * 4.5 + cropsCount * 3.0 * cropMult
-    );
-    const stallBoost = Math.min(10, cleanFishStalls * 2.0);
-    const trafficBonus = flowPct >= 75 ? 8 : flowPct >= 55 ? 3 : 0;
-    const cleanWaterBonus = this.crises.pollutionLevel < 20 ? 4 : 0;
-
-    const povertyDrag = this.crises.povertyActive ? 24 : 0;
-    const virusDrag = this.crises.virusActive ? 16 : 0;
-    const warDrag = this.crises.warActive ? 18 : 0;
-    const pollutionDrag = this.crises.pollutionLevel * 0.28;
-    const taintedFishDrag = taintedStalls * 4.5;
-    const jamDrag =
-      (flowPct < 55 ? Math.min(10, (55 - flowPct) * 0.25) : 0) + Math.min(6, jammedCars * 0.6);
-    const craterDrag = Math.min(12, this.blastCraters.length * 2.0);
-    const incidentDrag =
-      Math.min(8, this.fires.filter((f) => f.status === 'active').length * 3.5) +
-      Math.min(6, this.robberies.filter((r) => r.status === 'active').length * 3);
-
-    const rawTarget =
-      52 +
-      businessBoost +
-      stallBoost +
-      trafficBonus +
-      cleanWaterBonus -
-      povertyDrag -
-      virusDrag -
-      warDrag -
-      pollutionDrag -
-      taintedFishDrag -
-      this.lawsuitShock -
-      jamDrag -
-      craterDrag -
-      incidentDrag;
-
-    const target = Math.max(5, Math.min(100, rawTarget));
-    this.economyScore += (target - this.economyScore) * Math.min(1, realDt * 0.75);
-  }
-
-  private updateCitizenHappiness(realDt: number) {
     let parks = 0;
     let shops = 0;
     let schools = 0;
@@ -7821,8 +7855,6 @@ export class CitySimulation {
     const pollutionPenalty = this.crises.pollutionLevel * 0.24;
     const craterPenalty = Math.min(12, this.blastCraters.length * 1.5);
     const lawsuitPenalty = Math.min(10, this.lawsuitShock * 0.35);
-    const economyPenalty = this.economyScore < 50 ? Math.min(14, (50 - this.economyScore) * 0.35) : 0;
-    const economyBoost = this.economyScore >= 80 ? 3 : 0;
     const incidentPenalty =
       Math.min(12, activeFires * 6) +
       Math.min(10, activeRobberies * 5) +
@@ -7843,7 +7875,6 @@ export class CitySimulation {
       amenitiesTotal +
       treeDelta +
       trafficBoost +
-      economyBoost +
       weatherDelta -
       trafficPenalty -
       virusPenalty -
@@ -7852,7 +7883,6 @@ export class CitySimulation {
       pollutionPenalty -
       craterPenalty -
       lawsuitPenalty -
-      economyPenalty -
       incidentPenalty -
       coopedUpPenalty -
       bridgePenalty;
@@ -7870,7 +7900,6 @@ export class CitySimulation {
     if (warPenalty > 0) notes.push(`War -${Math.round(warPenalty)}`);
     if (povertyPenalty > 0) notes.push(`Poverty -${Math.round(povertyPenalty)}`);
     if (lawsuitPenalty >= 2) notes.push(`Lawsuits -${Math.round(lawsuitPenalty)}`);
-    if (economyPenalty >= 3) notes.push(`Economy -${Math.round(economyPenalty)}`);
     if (craterPenalty > 0) notes.push(`Craters -${Math.round(craterPenalty)}`);
     if (incidentPenalty > 0) notes.push(`Incidents -${Math.round(incidentPenalty)}`);
     if (bridgePenalty > 0) notes.push(`Broken bridge -${bridgePenalty}`);
@@ -8813,7 +8842,6 @@ export class CitySimulation {
           });
           this.logDailyNews(`ELECTION DRAMA: Voters picked a brand-new Mayor at ${hall.name}! Half the town cheered, and Uncle Leo already wants free Pizza Fridays.`);
           this.citizenHappiness = Math.min(100, this.citizenHappiness + 8);
-          this.economyScore = Math.min(100, this.economyScore + 5);
           if (playAudio) soundEngine.playCelebrationFanfare();
         }
       }
@@ -11221,7 +11249,6 @@ export class CitySimulation {
       citizenHappiness: Math.round(this.citizenHappiness),
       happinessMood: this.getHappinessMood(this.citizenHappiness),
       happinessSummary: this.happinessSummary,
-      economyScore: Math.round(this.economyScore),
       totalLawsuits: this.totalLawsuits,
       hasCityHall: this.hasCityHall(),
       prisonInmates: this.prisonInmates,
@@ -11915,7 +11942,50 @@ export class CitySimulation {
         }
       }
     }
-    void playAudio;
+
+    // 4. Natural Disasters — occur organically over time (weather/season-weighted) without needing City Hall command
+    this.naturalDisasterCooldown = Math.max(0, this.naturalDisasterCooldown - simDt);
+    const anyDisasterActive =
+      this.crises.tornadoActive || this.crises.earthquakeActive || this.crises.floodActive;
+    if (
+      this.mapId !== 'tutorial_town' &&
+      this.buildingsList.length >= 4 &&
+      !anyDisasterActive &&
+      this.naturalDisasterCooldown <= 0
+    ) {
+      this.naturalDisasterAccumulator += simDt;
+      if (this.naturalDisasterAccumulator >= 16) {
+        this.naturalDisasterAccumulator -= 16;
+
+        const tornadoChance =
+          this.weather === 'Storm'
+            ? 0.14
+            : this.weather === 'Windy'
+            ? 0.08
+            : this.season === 'Spring' || this.season === 'Summer'
+            ? 0.025
+            : 0.01;
+        const floodChance =
+          this.weather === 'Storm' ? 0.16 : this.weather === 'Rain' ? 0.095 : 0.012;
+        const earthquakeChance = 0.038;
+
+        const rawCandidates: { type: 'tornado' | 'earthquake' | 'flood'; chance: number }[] = [
+          { type: 'tornado', chance: tornadoChance },
+          { type: 'flood', chance: floodChance },
+          { type: 'earthquake', chance: earthquakeChance },
+        ];
+        const candidates = rawCandidates.sort(() => Math.random() - 0.5);
+
+        for (const candidate of candidates) {
+          if (this.chaosCooldowns[candidate.type] <= 0 && Math.random() < candidate.chance) {
+            if (this.triggerDisaster(candidate.type, playAudio, true)) {
+              this.naturalDisasterCooldown = 210;
+            }
+            break;
+          }
+        }
+      }
+    }
   }
 
   private updateSchoolAndBuildingStatuses(simDt: number, realDt: number, playAudio: boolean) {
@@ -12592,7 +12662,6 @@ export class CitySimulation {
               crop.cropStage = 0;
               crop.cropTimer = 0;
               p.carryingItem = 'produce';
-              this.economyScore = Math.min(100, this.economyScore + 0.6);
               this.floatingLabels.push({
                 wx: (crop.x + 0.5) * TILE_SIZE,
                 wy: (crop.y + 0.3) * TILE_SIZE,
@@ -12631,7 +12700,6 @@ export class CitySimulation {
               this.animals.splice(aIdx, 1);
               p.carryingItem = 'meat';
               this.butcherMeatReserve = Math.min(12, this.butcherMeatReserve + 2);
-              this.economyScore = Math.min(100, this.economyScore + 0.7);
               this.floatingLabels.push({
                 wx: p.wx,
                 wy: p.wy - 10,
@@ -13096,7 +13164,6 @@ export class CitySimulation {
               }
             } else {
               p.state = 'kayaking';
-              this.economyScore = Math.min(100, this.economyScore + 0.25);
             }
           } else if (res === 'blocked') {
             this.people.splice(i, 1);
@@ -13173,7 +13240,6 @@ export class CitySimulation {
             p.state = 'kayaking';
             p.wx = (wtx! + 0.5) * TILE_SIZE;
             p.wy = (wty! + 0.5) * TILE_SIZE;
-            this.economyScore = Math.min(100, this.economyScore + 0.45);
           }
         } else if (p.state === 'kayaking') {
           const animRate = p.waterActivity === 'swim' ? 6.2 : p.waterActivity === 'rowing' ? 3.8 : 4.6;

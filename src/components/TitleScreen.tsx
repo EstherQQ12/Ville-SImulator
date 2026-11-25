@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, Compass, GraduationCap, RotateCcw, Trash2, X } from 'lucide-react';
+import { BookOpen, Compass, GraduationCap, RotateCcw, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import { BIOME_TEMPLATES, PRESET_MAPS } from '../data/defaultBlueprints';
-import { MapTemplateKind, SavedMapData, TrashedMapEntry } from '../types/game';
+import { CustomBiomeConfig, MapTemplateKind, SavedMapData, TrashedMapEntry } from '../types/game';
+import { CustomBiomeModal } from './CustomBiomeModal';
+import { GUIDE_BOOK_STEPS } from './TutorialOverlay';
 
 interface TitleScreenProps {
   selectedPresetId: string;
@@ -10,6 +12,7 @@ interface TitleScreenProps {
   hiddenPresetIds: string[];
   onSelectMap: (map: SavedMapData) => void;
   onCreateBiomeMap: (template: MapTemplateKind) => void;
+  onCreateCustomBiome: (config: CustomBiomeConfig) => void;
   onDeleteWorld: (map: SavedMapData) => void;
   onRestoreTrashedMap: (id: string) => void;
   onPermanentDeleteTrashedMap: (id: string) => void;
@@ -25,6 +28,7 @@ export function TitleScreen({
   hiddenPresetIds,
   onSelectMap,
   onCreateBiomeMap,
+  onCreateCustomBiome,
   onDeleteWorld,
   onRestoreTrashedMap,
   onPermanentDeleteTrashedMap,
@@ -34,16 +38,18 @@ export function TitleScreen({
 }: TitleScreenProps) {
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [isTrashOpen, setIsTrashOpen] = useState(false);
+  const [isCustomBiomeOpen, setIsCustomBiomeOpen] = useState(false);
   const [tab, setTab] = useState<'scenarios' | 'biomes'>('scenarios');
   const [selectedBiome, setSelectedBiome] = useState<MapTemplateKind | null>(null);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (isGuideOpen || isTrashOpen) {
+      if (isGuideOpen || isTrashOpen || isCustomBiomeOpen) {
         if (e.key === 'Escape') {
           e.preventDefault();
           setIsGuideOpen(false);
           setIsTrashOpen(false);
+          setIsCustomBiomeOpen(false);
         }
         return;
       }
@@ -54,7 +60,7 @@ export function TitleScreen({
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [onStartGame, isGuideOpen, isTrashOpen]);
+  }, [onStartGame, isGuideOpen, isTrashOpen, isCustomBiomeOpen]);
 
   const visiblePresets = PRESET_MAPS.filter((p) => !hiddenPresetIds.includes(p.id));
   const allMaps = [...savedMaps, ...visiblePresets];
@@ -131,7 +137,7 @@ export function TitleScreen({
                       : 'text-slate-300 hover:text-white'
                   }`}
                 >
-                  Towns &amp; Saves
+                  Towns &amp; Worlds
                 </button>
                 <button
                   type="button"
@@ -198,36 +204,62 @@ export function TitleScreen({
                 </div>
               )
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {BIOME_TEMPLATES.map((tpl) => {
-                  const active = selectedBiome === tpl.id;
-                  return (
-                    <button
-                      key={tpl.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedBiome(tpl.id);
-                        onCreateBiomeMap(tpl.id);
-                      }}
-                      className={`text-left p-2.5 rounded-lg border transition-colors ${
-                        active
-                          ? 'bg-slate-800/95 border-emerald-400 text-white'
-                          : 'bg-slate-900/80 border-slate-700/70 text-slate-300 hover:border-slate-500 hover:bg-slate-800/70'
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5 text-xs font-semibold">
-                        <span
-                          className="w-2.5 h-2.5 rounded-sm shrink-0"
-                          style={{ backgroundColor: tpl.accent }}
-                        />
-                        <span className="truncate">{tpl.name}</span>
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCustomBiomeOpen(true)}
+                  className={`w-full flex items-center justify-between gap-3 p-2.5 rounded-lg border transition-colors ${
+                    selectedBiome === 'custom'
+                      ? 'bg-emerald-950/60 border-emerald-400 text-white'
+                      : 'bg-slate-900/90 border-emerald-500/50 text-emerald-200 hover:bg-slate-800/80 hover:border-emerald-400'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <SlidersHorizontal className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <div className="text-left min-w-0">
+                      <div className="text-xs font-bold text-white truncate">
+                        Customize New Biome
                       </div>
-                      <div className="text-[11px] text-slate-400 line-clamp-2 mt-1">
-                        {tpl.description}
+                      <div className="text-[11px] text-slate-300 truncate">
+                        Pick map size (up to 52×34), water shape, beaches &amp; forests
                       </div>
-                    </button>
-                  );
-                })}
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 rounded bg-emerald-400 text-slate-950 text-[11px] font-bold whitespace-nowrap shrink-0">
+                    Customize
+                  </span>
+                </button>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {BIOME_TEMPLATES.map((tpl) => {
+                    const active = selectedBiome === tpl.id;
+                    return (
+                      <button
+                        key={tpl.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedBiome(tpl.id);
+                          onCreateBiomeMap(tpl.id);
+                        }}
+                        className={`text-left p-2.5 rounded-lg border transition-colors ${
+                          active
+                            ? 'bg-slate-800/95 border-emerald-400 text-white'
+                            : 'bg-slate-900/80 border-slate-700/70 text-slate-300 hover:border-slate-500 hover:bg-slate-800/70'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 text-xs font-semibold">
+                          <span
+                            className="w-2.5 h-2.5 rounded-sm shrink-0"
+                            style={{ backgroundColor: tpl.accent }}
+                          />
+                          <span className="truncate">{tpl.name}</span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 line-clamp-2 mt-1">
+                          {tpl.description}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>
@@ -391,47 +423,28 @@ export function TitleScreen({
             </div>
 
             <div className="p-5 overflow-y-auto touch-pan-y space-y-2.5 text-xs leading-snug text-slate-300">
-              <div className="bg-slate-900/80 border border-rose-500/40 rounded-lg p-3">
-                <div className="font-semibold text-rose-300 mb-0.5">1. Find City Hall — Hub of Chaos</div>
-                <p>
-                  Click <span className="text-amber-300 font-semibold">City Hall</span> on the map, press <span className="font-mono-tabular text-sky-300">F</span>, or tap the City Hall bar button to jump there. Inside: Nukes, Earthquakes, Tornadoes, Floods, Wars, Viruses, Protests, Events &amp; Basements.
-                </p>
-              </div>
-
-              <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-amber-300 mb-0.5">2. Worlds, Trash Bin &amp; Land</div>
-                <p>
-                  Play cities or create Islands, Jungles, Rivers &amp; Ponds. Deleted worlds go to the Trash Bin. Every 10 days unlocks +100 Land boxes (<span className="font-mono-tabular">L</span>).
-                </p>
-              </div>
-
-              <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-sky-300 mb-0.5">3. Daily Hours &amp; Weather</div>
-                <p>
-                  Schools run Mon–Fri (08:00–16:00). Stores &amp; Electronics Shop open 06:00–22:00; butchers supply Meat Stalls. Watch for crashes in Foggy weather.
-                </p>
-              </div>
-
-              <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-violet-300 mb-0.5">4. Permits &amp; Citizen Builds</div>
-                <p>
-                  Citizens propose houses &amp; shops with location and build time. Open Permits to Allow or Decline.
-                </p>
-              </div>
-
-              <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-emerald-300 mb-0.5">5. Animals, Boats &amp; Roads</div>
-                <p>
-                  Forests spawn land animals, humans build boats on water, and cars swerve or wait for animals crossing roads.
-                </p>
-              </div>
-
-              <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-amber-300 mb-0.5">6. News &amp; Paperboy</div>
-                <p>
-                  Snap and crop a daily photo, publish a headline, and watch the paperboy deliver as funny comments roll in.
-                </p>
-              </div>
+              {GUIDE_BOOK_STEPS.map((entry) => (
+                <div
+                  key={entry.step}
+                  className={`bg-slate-900/80 border rounded-lg p-3 ${
+                    entry.step === 3 ? 'border-rose-500/40' : 'border-slate-800'
+                  }`}
+                >
+                  <div className="font-semibold text-amber-300 mb-1">
+                    {entry.step}. {entry.title}
+                  </div>
+                  <div className="space-y-1 text-[11px] text-slate-300">
+                    {entry.items.map((item, idx) => (
+                      <p key={idx}>
+                        {item.label && (
+                          <span className="font-semibold text-sky-300 mr-1">{item.label}</span>
+                        )}
+                        <span>{item.text}</span>
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
 
             <div className="px-5 py-3 bg-slate-900 border-t border-slate-800 flex justify-end shrink-0">
@@ -446,6 +459,17 @@ export function TitleScreen({
           </div>
         </div>
       )}
+
+      {/* Custom Biome Builder Modal */}
+      <CustomBiomeModal
+        isOpen={isCustomBiomeOpen}
+        submitLabel="Use Custom Biome"
+        onClose={() => setIsCustomBiomeOpen(false)}
+        onCreateCustomBiome={(config) => {
+          setSelectedBiome('custom');
+          onCreateCustomBiome(config);
+        }}
+      />
     </div>
   );
 }

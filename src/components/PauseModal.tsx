@@ -1,9 +1,7 @@
 interface PauseModalProps {
   isOpen: boolean;
   mapName: string;
-  justSaved: boolean;
   onResume: () => void;
-  onSaveChanges: () => void;
   onOpenMapManager: () => void;
   onReturnToTitle: () => void;
 }
@@ -11,9 +9,7 @@ interface PauseModalProps {
 export function PauseModal({
   isOpen,
   mapName,
-  justSaved,
   onResume,
-  onSaveChanges,
   onOpenMapManager,
   onReturnToTitle,
 }: PauseModalProps) {
@@ -26,6 +22,9 @@ export function PauseModal({
           <h2 className="font-display text-2xl font-bold text-white">Simulation Paused</h2>
           <p className="text-xs text-slate-400 mt-1">
             Active map: <span className="text-slate-200 font-medium">{mapName}</span>
+          </p>
+          <p className="text-[11px] text-emerald-300/90 mt-1">
+            Auto-save active — progress saves automatically.
           </p>
         </div>
 
@@ -40,11 +39,11 @@ export function PauseModal({
           </div>
           <div className="flex justify-between">
             <span className="text-slate-400">Tools</span>
-            <span className="font-mono-tabular text-slate-200">V Select · R Road · X Bulldoze</span>
+            <span className="font-mono-tabular text-slate-200">V Select · R Road · L Land · X Remove</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-slate-400">Traffic Overlay</span>
-            <span className="font-mono-tabular text-slate-200">T Key</span>
+            <span className="text-slate-400">Map / Traffic</span>
+            <span className="font-mono-tabular text-slate-200">F Find Places · T Traffic</span>
           </div>
           <div className="flex justify-between">
             <span className="text-slate-400">Play / Pause Clock</span>
@@ -62,21 +61,10 @@ export function PauseModal({
           </button>
           <button
             type="button"
-            onClick={onSaveChanges}
-            className={`w-full py-2.5 px-4 rounded-lg font-medium text-sm transition-colors border ${
-              justSaved
-                ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-semibold'
-                : 'bg-slate-800 hover:bg-slate-700 text-emerald-300 border-slate-700'
-            }`}
-          >
-            {justSaved ? 'Changes Saved!' : 'Save Changes'}
-          </button>
-          <button
-            type="button"
             onClick={onOpenMapManager}
             className="w-full py-2.5 px-4 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 font-medium text-sm transition-colors border border-slate-700"
           >
-            Save / Load Maps
+            Worlds &amp; Biomes
           </button>
           <button
             type="button"

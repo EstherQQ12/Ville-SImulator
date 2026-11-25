@@ -1,18 +1,26 @@
 import React, { useState } from 'react';
-import { Compass, FolderOpen, GraduationCap, RotateCcw, Save, Trash2, X } from 'lucide-react';
+import {
+  Compass,
+  FolderOpen,
+  GraduationCap,
+  RotateCcw,
+  SlidersHorizontal,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { BIOME_TEMPLATES, PRESET_MAPS } from '../data/defaultBlueprints';
-import { MapTemplateKind, SavedMapData, TrashedMapEntry } from '../types/game';
+import { CustomBiomeConfig, MapTemplateKind, SavedMapData, TrashedMapEntry } from '../types/game';
 import { soundEngine } from '../utils/sound';
+import { CustomBiomeModal } from './CustomBiomeModal';
 
 interface MapManagerModalProps {
   isOpen: boolean;
-  currentMapName: string;
   savedMaps: SavedMapData[];
   trashedMaps: TrashedMapEntry[];
   onClose: () => void;
-  onSaveMap: (name: string) => void;
   onLoadMap: (map: SavedMapData) => void;
   onCreateBiomeMap: (template: MapTemplateKind, name?: string) => void;
+  onCreateCustomBiome: (config: CustomBiomeConfig) => void;
   onDeleteSavedMap: (id: string) => void;
   onRestoreTrashedMap: (id: string) => void;
   onPermanentDeleteTrashedMap: (id: string) => void;
@@ -22,32 +30,24 @@ interface MapManagerModalProps {
 
 export function MapManagerModal({
   isOpen,
-  currentMapName,
   savedMaps,
   trashedMaps,
   onClose,
-  onSaveMap,
   onLoadMap,
   onCreateBiomeMap,
+  onCreateCustomBiome,
   onDeleteSavedMap,
   onRestoreTrashedMap,
   onPermanentDeleteTrashedMap,
   onEmptyTrash,
   onStartTutorial,
 }: MapManagerModalProps) {
-  const [saveName, setSaveName] = useState(currentMapName);
   const [selectedTemplate, setSelectedTemplate] = useState<MapTemplateKind>('island');
   const [newMapName, setNewMapName] = useState('');
   const [view, setView] = useState<'maps' | 'trash'>('maps');
+  const [isCustomBiomeOpen, setIsCustomBiomeOpen] = useState(false);
 
   if (!isOpen) return null;
-
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = saveName.trim() || 'My Custom City';
-    soundEngine.playSaveIcon();
-    onSaveMap(trimmed);
-  };
 
   const handleCreateBiome = (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,9 +65,9 @@ export function MapManagerModal({
       <div className="w-full max-w-2xl bg-[#0F172A] border border-slate-700/80 rounded-xl shadow-2xl overflow-hidden text-slate-100">
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-900/60">
           <div>
-            <h2 className="font-display text-lg font-bold text-white">Maps &amp; Biomes</h2>
+            <h2 className="font-display text-lg font-bold text-white">Worlds &amp; Biomes</h2>
             <p className="text-xs text-slate-400">
-              Save your city, load presets, create biomes, or recover worlds from the Trash Bin
+              All cities auto-save automatically — switch worlds, create biomes, or check Trash Bin
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -163,36 +163,25 @@ export function MapManagerModal({
             </div>
           ) : (
             <>
-              {/* Save Current Map */}
-              <form onSubmit={handleSave} className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5">
-                <div className="text-xs font-medium text-slate-300 mb-2">Save Current Map</div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={saveName}
-                    onChange={(e) => setSaveName(e.target.value)}
-                    maxLength={32}
-                    placeholder="Enter map name..."
-                    className="flex-1 px-3 py-2 text-sm bg-slate-950 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-amber-400"
-                  />
-                  <button
-                    type="submit"
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
-                  >
-                    <Save className="w-4 h-4" />
-                    Save Map
-                  </button>
-                </div>
-              </form>
 
               {/* Create New Terrain Biome */}
               <form onSubmit={handleCreateBiome} className="bg-slate-900/80 border border-slate-800 rounded-lg p-3.5 space-y-3">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
                     <Compass className="w-3.5 h-3.5" />
                     Create New World Biome
                   </span>
-                  <span className="text-[11px] text-slate-400">Thick forests spawn more wild animals</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playUiTick();
+                      setIsCustomBiomeOpen(true);
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/60 text-emerald-200 text-[11px] font-semibold transition-colors"
+                  >
+                    <SlidersHorizontal className="w-3 h-3" />
+                    Customize Size &amp; Terrain...
+                  </button>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {BIOME_TEMPLATES.map((tpl) => {
@@ -243,11 +232,11 @@ export function MapManagerModal({
               {/* Saved Custom Maps */}
               <div>
                 <div className="text-xs font-medium text-slate-400 mb-2">
-                  Your Saved Maps ({savedMaps.length})
+                  Your Custom &amp; Biome Worlds ({savedMaps.length})
                 </div>
                 {savedMaps.length === 0 ? (
                   <div className="text-xs text-slate-500 border border-dashed border-slate-800 rounded-lg p-4 text-center">
-                    No custom maps saved yet. Save your current city above anytime.
+                    No custom biome worlds yet. Create one above and it will auto-save here!
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -330,6 +319,16 @@ export function MapManagerModal({
           )}
         </div>
       </div>
+
+      <CustomBiomeModal
+        isOpen={isCustomBiomeOpen}
+        submitLabel="Create & Play"
+        onClose={() => setIsCustomBiomeOpen(false)}
+        onCreateCustomBiome={(config) => {
+          onCreateCustomBiome(config);
+          onClose();
+        }}
+      />
     </div>
   );
 }

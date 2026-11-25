@@ -1,8 +1,13 @@
 import {
   BuildingBlueprint,
+  CustomBiomeConfig,
   GRID_COLS,
   GRID_ROWS,
   ICON_SIZE,
+  MAX_BIOME_COLS,
+  MAX_BIOME_ROWS,
+  MIN_BIOME_COLS,
+  MIN_BIOME_ROWS,
   MapTemplateKind,
   PlacedBuilding,
   SavedMapData,
@@ -898,7 +903,7 @@ export const CATEGORY_LABELS: Record<BuildingBlueprint['category'], string> = {
   road_path: 'Path for Cars (Driveable Road Tile)',
   landmark: 'Not for Cars (Scenic / No Car Trips)',
   workplace: 'Job Opportunities (Commuter Workplace)',
-  factory: 'Factory (Goods, Economy & Smokestacks)',
+  factory: 'Factory (Goods, Delivery Vans & Smokestacks)',
   crops: 'Crops Plot (Harvest, Food Supply & Farm Vans)',
   visit_spot: 'Go & Leave (Library, Cafe, Venue)',
   residential: 'Residential (Forms Neighbourhoods)',
@@ -913,14 +918,27 @@ export const CATEGORY_LABELS: Record<BuildingBlueprint['category'], string> = {
   park: 'Park (Weekend & Leisure)',
 };
 
-function createEmptyTiles(): SavedMapData['tiles'] {
+export function clampBiomeSize(cols?: number, rows?: number): { cols: number; rows: number } {
+  const c = Math.round(cols ?? GRID_COLS);
+  const r = Math.round(rows ?? GRID_ROWS);
+  return {
+    cols: Math.max(MIN_BIOME_COLS, Math.min(MAX_BIOME_COLS, Number.isFinite(c) ? c : GRID_COLS)),
+    rows: Math.max(MIN_BIOME_ROWS, Math.min(MAX_BIOME_ROWS, Number.isFinite(r) ? r : GRID_ROWS)),
+  };
+}
+
+function createEmptyTiles(
+  cols = GRID_COLS,
+  rows = GRID_ROWS,
+  baseTerrain: TerrainType = 'grass'
+): SavedMapData['tiles'] {
   const tiles: SavedMapData['tiles'] = [];
-  for (let y = 0; y < GRID_ROWS; y++) {
-    for (let x = 0; x < GRID_COLS; x++) {
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
       tiles.push({
         x,
         y,
-        terrain: 'grass',
+        terrain: baseTerrain,
         isDefaultLand: true,
         hasRoad: false,
         building: null,
@@ -1382,11 +1400,223 @@ export const BIOME_TEMPLATES: {
   },
 ];
 
-export function createBiomePreset(template: MapTemplateKind, customName?: string): SavedMapData {
-  const tiles = createEmptyTiles();
-  const idx = (x: number, y: number) => y * GRID_COLS + x;
-  const cx = (GRID_COLS - 1) / 2;
-  const cy = (GRID_ROWS - 1) / 2;
+function seededNoise(x: number, y: number, seed: number): number {
+  const n = Math.sin(x * 12.9898 + y * 78.233 + seed * 37.719) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+function smoothBiomeNoise(x: number, y: number, seed: number): number {
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const a = seededNoise(x0, y0, seed);
+  const b = seededNoise(x0 + 1, y0, seed);
+  const c = seededNoise(x0, y0 + 1, seed);
+  const d = seededNoise(x0 + 1, y0 + 1, seed);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+
+export function createCustomBiomePreset(config: CustomBiomeConfig): SavedMapData {
+  const { cols, rows } = clampBiomeSize(config.cols, config.rows);
+  const baseLand: TerrainType = config.baseGround === 'sand' ? 'sand' : 'grass';
+  const tiles = createEmptyTiles(cols, rows, baseLand);
+  const idx = (x: number, y: number) => y * cols + x;
+  const cx = (cols - 1) / 2;
+  const cy = (rows - 1) / 2;
+  const seed = Math.abs(Math.floor(config.seed || 1)) || 1;
+  const waterRatio = Math.max(0, Math.min(100, config.waterAmount)) / 100;
+  const forestRatio = Math.max(0, Math.min(100, config.forestDensity)) / 100;
+  const sandRatio = Math.max(0, Math.min(100, config.sandAmount)) / 100;
+
+  const isHorizontalRiver = seed % 2 === 1;
+  const pondOffsetX = (seededNoise(seed, 3, seed) - 0.5) * cols * 0.16;
+  const pondOffsetY = (seededNoise(7, seed, seed) - 0.5) * rows * 0.16;
+
+  const islandCount = Math.max(4, Math.min(7, Math.round((cols * rows) / 140) + (seed % 2)));
+  const archIsles: { ix: number; iy: number; r: number }[] = [];
+  if (config.waterStyle === 'archipelago') {
+    const gridColsCount = islandCount >= 6 ? 3 : 2;
+    const gridRowsCount = Math.ceil(islandCount / gridColsCount);
+    let created = 0;
+    for (let gy = 0; gy < gridRowsCount && created < islandCount; gy++) {
+      for (let gx = 0; gx < gridColsCount && created < islandCount; gx++) {
+        const jx = (seededNoise(gx + 1, gy + 5, seed) - 0.5) * (cols / gridColsCount) * 0.35;
+        const jy = (seededNoise(gx + 9, gy + 2, seed) - 0.5) * (rows / gridRowsCount) * 0.35;
+        const ix = ((gx + 0.5) / gridColsCount) * cols + jx;
+        const iy = ((gy + 0.5) / gridRowsCount) * rows + jy;
+        const baseR = Math.min(cols / gridColsCount, rows / gridRowsCount) * (0.58 - waterRatio * 0.24);
+        archIsles.push({ ix, iy, r: Math.max(2.6, baseR) });
+        created++;
+      }
+    }
+  }
+
+  // 1. Sculpt Water & Land
+  if (config.waterStyle !== 'none' && waterRatio > 0.02) {
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        let isWater = false;
+        if (config.waterStyle === 'river') {
+          if (isHorizontalRiver) {
+            const wave =
+              Math.sin((x + seed) * 0.28) * (rows * 0.08) +
+              Math.cos((x + seed * 0.5) * 0.14) * (rows * 0.05);
+            const riverY = cy + wave;
+            const halfW = 0.45 + waterRatio * 2.1;
+            if (Math.abs(y - riverY) <= halfW) isWater = true;
+          } else {
+            const wave =
+              Math.sin((y + seed) * 0.32) * (cols * 0.08) +
+              Math.cos((y + seed * 0.5) * 0.16) * (cols * 0.05);
+            const riverX = cx + wave;
+            const halfW = 0.45 + waterRatio * 2.4;
+            if (Math.abs(x - riverX) <= halfW) isWater = true;
+          }
+        } else if (config.waterStyle === 'pond') {
+          const rx = Math.max(2.2, cols * (0.12 + waterRatio * 0.24));
+          const ry = Math.max(2.0, rows * (0.14 + waterRatio * 0.26));
+          const wobble = (smoothBiomeNoise(x * 0.35, y * 0.35, seed + 11) - 0.5) * 0.28;
+          const dist = Math.hypot((x - (cx + pondOffsetX)) / rx, (y - (cy + pondOffsetY)) / ry) + wobble;
+          if (dist < 0.95) isWater = true;
+        } else if (config.waterStyle === 'island') {
+          const landScale = Math.max(0.24, 0.48 - waterRatio * 0.22);
+          const nx = (x - cx) / (cols * landScale);
+          const ny = (y - cy) / (rows * landScale);
+          const wobble = (smoothBiomeNoise(x * 0.28, y * 0.28, seed + 7) - 0.5) * 0.36;
+          if (Math.hypot(nx, ny) + wobble > 1.0) isWater = true;
+        } else if (config.waterStyle === 'archipelago') {
+          let bestRatio = 99;
+          for (const isle of archIsles) {
+            const wobble = (smoothBiomeNoise(x * 0.4, y * 0.4, seed + 13) - 0.5) * 0.26;
+            const ratio = Math.hypot((x - isle.ix) / isle.r, (y - isle.iy) / (isle.r * 0.85)) + wobble;
+            if (ratio < bestRatio) bestRatio = ratio;
+          }
+          if (bestRatio > 1.0) isWater = true;
+        }
+
+        if (isWater) {
+          tiles[idx(x, y)].terrain = 'water';
+        }
+      }
+    }
+  }
+
+  // 2. Apply Shoreline Sand & Inland Sand Patches
+  if (baseLand === 'grass' && sandRatio > 0.02) {
+    const shoreDepth = sandRatio >= 0.65 ? 2 : 1;
+    const isNearWater = (tx: number, ty: number, depth: number) => {
+      for (let dy = -depth; dy <= depth; dy++) {
+        for (let dx = -depth; dx <= depth; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = tx + dx;
+          const ny = ty + dy;
+          if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
+          if (tiles[idx(nx, ny)].terrain === 'water') return Math.max(Math.abs(dx), Math.abs(dy));
+        }
+      }
+      return 0;
+    };
+
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const t = tiles[idx(x, y)];
+        if (t.terrain !== 'grass') continue;
+        const nearDist = isNearWater(x, y, shoreDepth);
+        if (nearDist === 1 && seededNoise(x, y, seed + 23) < 0.25 + sandRatio * 0.75) {
+          t.terrain = 'sand';
+        } else if (nearDist === 2 && seededNoise(x, y, seed + 29) < (sandRatio - 0.45) * 1.1) {
+          t.terrain = 'sand';
+        } else if (sandRatio > 0.35) {
+          const dune = smoothBiomeNoise(x * 0.26, y * 0.26, seed + 31);
+          if (dune > 0.92 - (sandRatio - 0.35) * 0.55) {
+            t.terrain = 'sand';
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Apply Forest Groves
+  if (forestRatio > 0.02) {
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const t = tiles[idx(x, y)];
+        if (t.terrain === 'water') continue;
+        if (t.terrain === 'sand' && baseLand === 'grass' && forestRatio < 0.75) continue;
+        if (t.terrain === 'sand' && baseLand === 'sand' && forestRatio < 0.4) continue;
+        const fNoise =
+          smoothBiomeNoise(x * 0.3, y * 0.3, seed + 41) * 0.7 +
+          seededNoise(x, y, seed + 53) * 0.3;
+        const threshold = 0.94 - forestRatio * 0.62;
+        if (fNoise > threshold) {
+          t.terrain = 'forest';
+        }
+      }
+    }
+  }
+
+  // 4. Guarantee playable open buildable land tiles
+  const buildableCount = tiles.filter((t) => t.terrain === 'grass' || t.terrain === 'sand').length;
+  if (buildableCount < 16) {
+    const midX = Math.floor(cx);
+    const midY = Math.floor(cy);
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const tx = Math.max(0, Math.min(cols - 1, midX + dx));
+        const ty = Math.max(0, Math.min(rows - 1, midY + dy));
+        tiles[idx(tx, ty)].terrain = baseLand;
+      }
+    }
+  }
+
+  const waterLabels: Record<CustomBiomeConfig['waterStyle'], string> = {
+    none: baseLand === 'sand' ? 'Desert Plains' : 'Open Plains',
+    river: 'Winding River',
+    pond: 'Freshwater Pond',
+    island: 'Ocean Island',
+    archipelago: 'Island Chain',
+  };
+
+  return {
+    id: `biome_custom_${Date.now()}`,
+    name: config.name?.trim() || `${waterLabels[config.waterStyle]} (${cols}×${rows})`,
+    subtitle: `${cols}×${rows} custom biome · ${waterLabels[config.waterStyle]}`,
+    updatedAt: Date.now(),
+    gridCols: cols,
+    gridRows: rows,
+    template: 'custom',
+    tiles,
+    customBlueprints: [],
+  };
+}
+
+export function createBiomePreset(
+  template: MapTemplateKind,
+  customName?: string,
+  size?: { cols?: number; rows?: number }
+): SavedMapData {
+  if (template === 'custom') {
+    return createCustomBiomePreset({
+      name: customName,
+      cols: size?.cols ?? GRID_COLS,
+      rows: size?.rows ?? GRID_ROWS,
+      baseGround: 'grass',
+      waterStyle: 'river',
+      waterAmount: 45,
+      forestDensity: 35,
+      sandAmount: 30,
+      seed: Math.floor(Math.random() * 9000) + 100,
+    });
+  }
+
+  const { cols, rows } = clampBiomeSize(size?.cols, size?.rows);
+  const tiles = createEmptyTiles(cols, rows);
+  const idx = (x: number, y: number) => y * cols + x;
+  const cx = (cols - 1) / 2;
+  const cy = (rows - 1) / 2;
 
   const noise = (x: number, y: number) => {
     const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
@@ -1399,9 +1629,14 @@ export function createBiomePreset(template: MapTemplateKind, customName?: string
   if (template === 'valley') {
     defaultName = 'Grass Valley';
     subtitle = 'Open green terrain with gentle tree groves';
-    for (let y = 0; y < GRID_ROWS; y++) {
-      for (let x = 0; x < GRID_COLS; x++) {
-        if (noise(x * 0.7, y * 0.7) > 0.88 && (x < 6 || x > GRID_COLS - 7 || y < 4 || y > GRID_ROWS - 5)) {
+    const marginX = Math.max(3, Math.round(cols * 0.18));
+    const marginY = Math.max(2, Math.round(rows * 0.18));
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        if (
+          noise(x * 0.7, y * 0.7) > 0.88 &&
+          (x < marginX || x >= cols - marginX || y < marginY || y >= rows - marginY)
+        ) {
           tiles[idx(x, y)].terrain = 'forest';
         }
       }
@@ -1409,10 +1644,10 @@ export function createBiomePreset(template: MapTemplateKind, customName?: string
   } else if (template === 'island') {
     defaultName = 'Coral Island';
     subtitle = 'Sandy-shored tropical island surrounded by deep sea';
-    for (let y = 0; y < GRID_ROWS; y++) {
-      for (let x = 0; x < GRID_COLS; x++) {
-        const nx = (x - cx) / (GRID_COLS * 0.36);
-        const ny = (y - cy) / (GRID_ROWS * 0.36);
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const nx = (x - cx) / (cols * 0.36);
+        const ny = (y - cy) / (rows * 0.36);
         const wobble = Math.sin(x * 0.45) * 0.08 + Math.cos(y * 0.55) * 0.08;
         const dist = Math.hypot(nx, ny) + wobble;
         if (dist > 1.02) {
@@ -1429,16 +1664,17 @@ export function createBiomePreset(template: MapTemplateKind, customName?: string
   } else if (template === 'archipelago') {
     defaultName = 'Sunlit Archipelago';
     subtitle = 'Lots of isolated sandy islands separated by ocean channels';
+    const scaleR = Math.min(cols / GRID_COLS, rows / GRID_ROWS);
     const isles = [
-      { ix: 7, iy: 6, r: 4.5 },
-      { ix: 17, iy: 5, r: 3.8 },
-      { ix: 26, iy: 7, r: 4.6 },
-      { ix: 8, iy: 15, r: 4.4 },
-      { ix: 18, iy: 15, r: 4.8 },
-      { ix: 27, iy: 16, r: 3.9 },
+      { ix: cols * 0.21, iy: rows * 0.27, r: Math.max(2.6, 4.5 * scaleR) },
+      { ix: cols * 0.5, iy: rows * 0.23, r: Math.max(2.4, 3.8 * scaleR) },
+      { ix: cols * 0.77, iy: rows * 0.32, r: Math.max(2.6, 4.6 * scaleR) },
+      { ix: cols * 0.24, iy: rows * 0.68, r: Math.max(2.5, 4.4 * scaleR) },
+      { ix: cols * 0.53, iy: rows * 0.68, r: Math.max(2.7, 4.8 * scaleR) },
+      { ix: cols * 0.79, iy: rows * 0.73, r: Math.max(2.4, 3.9 * scaleR) },
     ];
-    for (let y = 0; y < GRID_ROWS; y++) {
-      for (let x = 0; x < GRID_COLS; x++) {
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
         let bestRatio = 99;
         for (const isle of isles) {
           const ratio = Math.hypot((x - isle.ix) / isle.r, (y - isle.iy) / (isle.r * 0.85));
@@ -1458,46 +1694,57 @@ export function createBiomePreset(template: MapTemplateKind, customName?: string
   } else if (template === 'jungle') {
     defaultName = 'Emerald Jungle';
     subtitle = 'Lush tropical forest clusters rich with wild animals';
-    for (let y = 0; y < GRID_ROWS; y++) {
-      for (let x = 0; x < GRID_COLS; x++) {
+    const midStream = Math.round(cols * 0.47);
+    const clearR = Math.max(3.2, Math.min(cols, rows) * 0.2);
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
         const wave = Math.sin(x * 0.42 + y * 0.28) + Math.cos(x * 0.23 - y * 0.48);
-        const centerClear = Math.hypot(x - cx, y - cy) < 4.5;
+        const centerClear = Math.hypot(x - cx, y - cy) < clearR;
         if (!centerClear && (wave > 0.35 || noise(x, y) > 0.7)) {
           tiles[idx(x, y)].terrain = 'forest';
-        } else if (Math.abs(x - (16 + Math.round(Math.sin(y * 0.4) * 1.5))) === 0 && y > 1 && y < GRID_ROWS - 2 && noise(x, y) > 0.85) {
+        } else if (
+          Math.abs(x - (midStream + Math.round(Math.sin(y * 0.4) * 1.5))) === 0 &&
+          y > 1 &&
+          y < rows - 2 &&
+          noise(x, y) > 0.85
+        ) {
           tiles[idx(x, y)].terrain = 'water';
         } else {
           tiles[idx(x, y)].terrain = 'grass';
         }
       }
     }
-    // Small jungle creek
-    for (let y = 0; y < GRID_ROWS; y++) {
-      const rx = 24 + Math.round(Math.sin(y * 0.45) * 1.4);
-      if (rx >= 0 && rx < GRID_COLS) {
+    const creekX = Math.round(cols * 0.71);
+    for (let y = 0; y < rows; y++) {
+      const rx = creekX + Math.round(Math.sin(y * 0.45) * 1.4);
+      if (rx >= 0 && rx < cols) {
         tiles[idx(rx, y)].terrain = 'water';
       }
     }
   } else if (template === 'river') {
     defaultName = 'Twin Banks River';
     subtitle = 'Grassy valley split down the middle by a winding river';
-    for (let y = 0; y < GRID_ROWS; y++) {
-      const rx = Math.round(cx + Math.sin(y * 0.36) * 2.2);
+    for (let y = 0; y < rows; y++) {
+      const rx = Math.round(cx + Math.sin(y * 0.36) * Math.max(1.5, cols * 0.065));
       for (let dx = -1; dx <= 1; dx++) {
         const tx = rx + dx;
-        if (tx >= 0 && tx < GRID_COLS) {
+        if (tx >= 0 && tx < cols) {
           tiles[idx(tx, y)].terrain = 'water';
         }
       }
       const bankLeft = rx - 2;
       const bankRight = rx + 2;
       if (bankLeft >= 0 && noise(bankLeft, y) > 0.65) tiles[idx(bankLeft, y)].terrain = 'sand';
-      if (bankRight < GRID_COLS && noise(bankRight, y) > 0.65) tiles[idx(bankRight, y)].terrain = 'sand';
+      if (bankRight < cols && noise(bankRight, y) > 0.65) tiles[idx(bankRight, y)].terrain = 'sand';
     }
-    // Forest clumps near outer edges
-    for (let y = 0; y < GRID_ROWS; y++) {
-      for (let x = 0; x < GRID_COLS; x++) {
-        if (tiles[idx(x, y)].terrain === 'grass' && (x <= 5 || x >= GRID_COLS - 6) && noise(x, y) > 0.62) {
+    const edgeMargin = Math.max(3, Math.round(cols * 0.16));
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        if (
+          tiles[idx(x, y)].terrain === 'grass' &&
+          (x <= edgeMargin || x >= cols - 1 - edgeMargin) &&
+          noise(x, y) > 0.62
+        ) {
           tiles[idx(x, y)].terrain = 'forest';
         }
       }
@@ -1505,9 +1752,11 @@ export function createBiomePreset(template: MapTemplateKind, customName?: string
   } else if (template === 'pond') {
     defaultName = 'Willow Pond';
     subtitle = 'Peaceful pond surrounded by trees and wildlife glades';
-    for (let y = 0; y < GRID_ROWS; y++) {
-      for (let x = 0; x < GRID_COLS; x++) {
-        const dist = Math.hypot((x - cx) / 5.4, (y - cy) / 3.8) + Math.sin(x * 0.6 + y * 0.5) * 0.1;
+    const rx = Math.max(3.2, cols * 0.16);
+    const ry = Math.max(2.4, rows * 0.17);
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const dist = Math.hypot((x - cx) / rx, (y - cy) / ry) + Math.sin(x * 0.6 + y * 0.5) * 0.1;
         if (dist < 0.88) {
           tiles[idx(x, y)].terrain = 'water';
         } else if (dist < 1.08 && noise(x, y) > 0.5) {
@@ -1522,10 +1771,10 @@ export function createBiomePreset(template: MapTemplateKind, customName?: string
   return {
     id: `biome_${template}_${Date.now()}`,
     name: customName?.trim() || defaultName,
-    subtitle,
+    subtitle: `${cols}×${rows} · ${subtitle}`,
     updatedAt: Date.now(),
-    gridCols: GRID_COLS,
-    gridRows: GRID_ROWS,
+    gridCols: cols,
+    gridRows: rows,
     template,
     tiles,
     customBlueprints: [],

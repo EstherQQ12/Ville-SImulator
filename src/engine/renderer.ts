@@ -37,6 +37,7 @@ export interface RenderOptions {
   showTrafficOverlay: boolean;
   showGrid: boolean;
   wallTimeSeconds: number;
+  landBrushSize?: number;
 }
 
 interface CachedIcon {
@@ -438,7 +439,7 @@ export function renderSimulation(
   }
 
   if (hover.visible && hover.tileX >= 0 && hover.tileX < sim.gridCols && hover.tileY >= 0 && hover.tileY < sim.gridRows) {
-    drawHoverPreview(ctx, sim, hover, toolMode, activeBlueprint);
+    drawHoverPreview(ctx, sim, hover, toolMode, activeBlueprint, opts.landBrushSize ?? 1);
   }
 
   ctx.restore();
@@ -4767,7 +4768,8 @@ function drawHoverPreview(
   sim: CitySimulation,
   hover: HoverState,
   toolMode: ToolMode,
-  activeBlueprint: BuildingBlueprint | null
+  activeBlueprint: BuildingBlueprint | null,
+  landBrushSize = 1
 ) {
   const tx = hover.tileX;
   const ty = hover.tileY;
@@ -4816,17 +4818,105 @@ function drawHoverPreview(
   }
 
   if (toolMode === 'land') {
-    if (tile.terrain === 'void') {
-      const canAdd = sim.canPlaceExpansionLandAt(tx, ty);
-      ctx.fillStyle = canAdd ? 'rgba(16, 185, 129, 0.36)' : 'rgba(239, 68, 68, 0.28)';
-      ctx.fillRect(wx, wy, TILE_SIZE, TILE_SIZE);
-      drawCornerReticle(ctx, wx + 1, wy + 1, TILE_SIZE - 2, canAdd ? '#10B981' : '#EF4444', 2);
-      return;
+    const size = Math.max(1, Math.min(5, Math.floor(landBrushSize || 1)));
+    const start = -Math.floor((size - 1) / 2);
+    const end = start + size - 1;
+
+    // Precompute wavefront reachability for void tiles inside the brush when adding land
+    const reachableVoidKeys = new Set<string>();
+    if (sim.expansionCredits > 0) {
+      let remainingCredits = sim.expansionCredits;
+      for (let pass = 0; pass < size && remainingCredits > 0; pass++) {
+        let added = 0;
+        for (let dy = start; dy <= end && remainingCredits > 0; dy++) {
+          for (let dx = start; dx <= end && remainingCredits > 0; dx++) {
+            const bx = tx + dx;
+            const by = ty + dy;
+            const bt = sim.getTile(bx, by);
+            if (!bt || bt.terrain !== 'void') continue;
+            const key = `${bx},${by}`;
+            if (reachableVoidKeys.has(key)) continue;
+
+            let canReach = sim.canPlaceExpansionLandAt(bx, by);
+            if (!canReach && pass > 0) {
+              for (let ny = -2; ny <= 2 && !canReach; ny++) {
+                for (let nx = -2; nx <= 2; nx++) {
+                  if (nx === 0 && ny === 0) continue;
+                  if (Math.abs(nx) + Math.abs(ny) > 2) continue;
+                  if (reachableVoidKeys.has(`${bx + nx},${by + ny}`)) {
+                    canReach = true;
+                    break;
+                  }
+                }
+              }
+            }
+            if (canReach) {
+              reachableVoidKeys.add(key);
+              remainingCredits--;
+              added++;
+            }
+          }
+        }
+        if (added === 0) break;
+      }
     }
-    const canRemove = sim.canRemoveExpansionLandAt(tx, ty);
-    ctx.fillStyle = canRemove ? 'rgba(250, 204, 21, 0.32)' : 'rgba(239, 68, 68, 0.28)';
-    ctx.fillRect(wx, wy, TILE_SIZE, TILE_SIZE);
-    drawCornerReticle(ctx, wx + 1, wy + 1, TILE_SIZE - 2, canRemove ? '#FACC15' : '#EF4444', 2);
+
+    let minBx = Infinity;
+    let minBy = Infinity;
+    let maxBx = -Infinity;
+    let maxBy = -Infinity;
+
+    for (let dy = start; dy <= end; dy++) {
+      for (let dx = start; dx <= end; dx++) {
+        const bx = tx + dx;
+        const by = ty + dy;
+        const bt = sim.getTile(bx, by);
+        if (!bt) continue;
+        minBx = Math.min(minBx, bx);
+        minBy = Math.min(minBy, by);
+        maxBx = Math.max(maxBx, bx);
+        maxBy = Math.max(maxBy, by);
+
+        const bwx = bx * TILE_SIZE;
+        const bwy = by * TILE_SIZE;
+        if (bt.terrain === 'void') {
+          const canAdd = reachableVoidKeys.has(`${bx},${by}`);
+          ctx.fillStyle = canAdd ? 'rgba(16, 185, 129, 0.36)' : 'rgba(239, 68, 68, 0.24)';
+          ctx.fillRect(bwx, bwy, TILE_SIZE, TILE_SIZE);
+          if (size === 1) {
+            drawCornerReticle(ctx, bwx + 1, bwy + 1, TILE_SIZE - 2, canAdd ? '#10B981' : '#EF4444', 2);
+          } else {
+            ctx.strokeStyle = canAdd ? 'rgba(16, 185, 129, 0.65)' : 'rgba(239, 68, 68, 0.45)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(bwx + 0.5, bwy + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
+          }
+        } else {
+          const canRemove = sim.canRemoveExpansionLandAt(bx, by);
+          ctx.fillStyle = canRemove ? 'rgba(250, 204, 21, 0.32)' : 'rgba(239, 68, 68, 0.24)';
+          ctx.fillRect(bwx, bwy, TILE_SIZE, TILE_SIZE);
+          if (size === 1) {
+            drawCornerReticle(ctx, bwx + 1, bwy + 1, TILE_SIZE - 2, canRemove ? '#FACC15' : '#EF4444', 2);
+          } else {
+            ctx.strokeStyle = canRemove ? 'rgba(250, 204, 21, 0.7)' : 'rgba(239, 68, 68, 0.45)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(bwx + 0.5, bwy + 0.5, TILE_SIZE - 1, TILE_SIZE - 1);
+          }
+        }
+      }
+    }
+
+    if (size > 1 && minBx <= maxBx && minBy <= maxBy) {
+      ctx.save();
+      ctx.strokeStyle = tile.terrain === 'void' ? '#34D399' : '#FACC15';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(
+        minBx * TILE_SIZE + 1,
+        minBy * TILE_SIZE + 1,
+        (maxBx - minBx + 1) * TILE_SIZE - 2,
+        (maxBy - minBy + 1) * TILE_SIZE - 2
+      );
+      ctx.restore();
+    }
     return;
   }
 
