@@ -216,6 +216,7 @@ export default function App() {
   showGridRef.current = showGrid;
   const isUiHiddenRef = useRef(isUiHidden);
   isUiHiddenRef.current = isUiHidden;
+  const uiWasHiddenBeforeCameraRef = useRef<boolean>(false);
 
   const persistCurrentRuntimeMap = useCallback(() => {
     const sim = simRef.current;
@@ -435,7 +436,11 @@ export default function App() {
       if (e.key === 'Escape') {
         e.preventDefault();
         if (gameStateRef.current === 'PLAYING') {
-          if (isUiHiddenRef.current) {
+          if (toolModeRef.current === 'camera') {
+            setToolMode('pan');
+            setIsUiHidden(uiWasHiddenBeforeCameraRef.current);
+            soundEngine.playUiTick();
+          } else if (isUiHiddenRef.current) {
             setIsUiHidden(false);
           } else if (selectionRef.current || selectedCarIdRef.current) {
             setSelection(null);
@@ -467,6 +472,8 @@ export default function App() {
         setToolMode('select');
         soundEngine.playUiTick();
       } else if (lower === 'c') {
+        uiWasHiddenBeforeCameraRef.current = isUiHiddenRef.current;
+        setIsUiHidden(true);
         setToolMode('camera');
         soundEngine.playUiTick();
       } else if (lower === 'r') {
@@ -552,6 +559,7 @@ export default function App() {
       });
       soundEngine.playBulldoze();
       setToolMode('pan');
+      setIsUiHidden(uiWasHiddenBeforeCameraRef.current);
       return;
     }
 
@@ -602,6 +610,7 @@ export default function App() {
     setDraftInitialCrop(initCrop);
     setDraftNewsPhoto(dataUrl || null);
     setToolMode('pan');
+    setIsUiHidden(uiWasHiddenBeforeCameraRef.current);
     setIsNewspaperOpen(true);
   };
 
@@ -1412,6 +1421,12 @@ export default function App() {
             soundEngine.playUiTick();
           }}
           onSelectTool={(mode) => {
+            if (mode === 'camera') {
+              uiWasHiddenBeforeCameraRef.current = isUiHiddenRef.current;
+              setIsUiHidden(true);
+            } else if (toolModeRef.current === 'camera') {
+              setIsUiHidden(uiWasHiddenBeforeCameraRef.current);
+            }
             setToolMode(mode);
             soundEngine.playUiTick();
           }}
@@ -1625,6 +1640,16 @@ export default function App() {
               setStats(simRef.current!.getStats());
               setInspectorTick((t) => t + 1);
             }}
+            onTriggerRobbery={(x, y) => {
+              simRef.current!.triggerRobberyAt(x, y, true);
+              setStats(simRef.current!.getStats());
+              setInspectorTick((t) => t + 1);
+            }}
+            onTriggerFire={(x, y) => {
+              simRef.current!.triggerFireAt(x, y, true);
+              setStats(simRef.current!.getStats());
+              setInspectorTick((t) => t + 1);
+            }}
             onHostCityEvent={(x, y, evType: CityEventType) => {
               simRef.current!.hostCityEvent(x, y, evType, undefined, true);
               setStats(simRef.current!.getStats());
@@ -1723,6 +1748,8 @@ export default function App() {
         dailyHints={simRef.current.getDailyNewsHints()}
         onTakePhoto={() => {
           setIsNewspaperOpen(false);
+          uiWasHiddenBeforeCameraRef.current = isUiHiddenRef.current;
+          setIsUiHidden(true);
           setToolMode('camera');
           soundEngine.playUiTick();
         }}

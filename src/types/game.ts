@@ -248,6 +248,8 @@ export interface Person {
   protestId?: string;
   eventId?: string;
   fireId?: string;
+  targetRobberyId?: string;
+  targetCrashId?: string;
   speechTopic?: string;
   targetPersonId?: string;
   escortOfficerId?: string;

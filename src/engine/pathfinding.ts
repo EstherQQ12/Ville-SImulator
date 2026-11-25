@@ -130,6 +130,88 @@ export function findAdjacentRoadTile(
   return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
+export function findNearestRoadTile(
+  tiles: MapTile[],
+  bx: number,
+  by: number,
+  maxRadius = 6,
+  cols = GRID_COLS,
+  rows = GRID_ROWS
+): GridPoint | null {
+  const adjacent = getRoadNeighbors(tiles, bx, by, cols, rows);
+  if (adjacent.length > 0) {
+    const usable = adjacent.filter((pt) => !tiles[pt.y * cols + pt.x]?.isBridgeBroken);
+    const pool = usable.length > 0 ? usable : adjacent;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+  for (let r = 0; r <= maxRadius; r++) {
+    let best: GridPoint | null = null;
+    let bestDist = Infinity;
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const nx = bx + dx;
+        const ny = by + dy;
+        if (!inBounds(nx, ny, cols, rows)) continue;
+        const t = tiles[ny * cols + nx];
+        if (!t || t.terrain === 'void' || !t.hasRoad || t.isBridgeBroken) continue;
+        const d = dx * dx + dy * dy;
+        if (d < bestDist) {
+          bestDist = d;
+          best = { x: nx, y: ny };
+        }
+      }
+    }
+    if (best) return best;
+  }
+  return null;
+}
+
+export function findClosestReachableRoad(
+  tiles: MapTile[],
+  start: GridPoint,
+  goalX: number,
+  goalY: number,
+  cols = GRID_COLS,
+  rows = GRID_ROWS
+): GridPoint | null {
+  if (!inBounds(start.x, start.y, cols, rows)) return null;
+  const startTile = tiles[start.y * cols + start.x];
+  if (!startTile?.hasRoad || startTile.terrain === 'void' || startTile.isBridgeBroken) return null;
+
+  const total = cols * rows;
+  const visited = new Uint8Array(total);
+  const queue: number[] = [start.y * cols + start.x];
+  visited[start.y * cols + start.x] = 1;
+
+  let best: GridPoint = { x: start.x, y: start.y };
+  let bestDist = (start.x - goalX) ** 2 + (start.y - goalY) ** 2;
+
+  for (let head = 0; head < queue.length; head++) {
+    const curr = queue[head];
+    const cx = curr % cols;
+    const cy = Math.floor(curr / cols);
+    const d = (cx - goalX) ** 2 + (cy - goalY) ** 2;
+    if (d < bestDist) {
+      bestDist = d;
+      best = { x: cx, y: cy };
+    }
+
+    for (const dir of DIRS) {
+      const nx = cx + dir.x;
+      const ny = cy + dir.y;
+      if (!inBounds(nx, ny, cols, rows)) continue;
+      const nIdx = ny * cols + nx;
+      if (visited[nIdx]) continue;
+      const nt = tiles[nIdx];
+      if (!nt || nt.terrain === 'void' || !nt.hasRoad || nt.isBridgeBroken) continue;
+      visited[nIdx] = 1;
+      queue.push(nIdx);
+    }
+  }
+  return best;
+}
+
 export function findRoadPath(
   tiles: MapTile[],
   start: GridPoint,
@@ -163,7 +245,7 @@ export function findRoadPath(
 
   const open: number[] = [startIdx];
   inOpen[startIdx] = 1;
-  let stepsLeft = Math.max(1400, total * 2);
+  let stepsLeft = Math.max(4000, total * 4);
 
   while (open.length > 0 && stepsLeft-- > 0) {
     let bestPos = 0;
@@ -333,7 +415,7 @@ export function findPedestrianPath(
 
   const open: number[] = [startIdx];
   inOpen[startIdx] = 1;
-  let stepsLeft = Math.max(1400, total * 2);
+  let stepsLeft = Math.max(4000, total * 4);
 
   while (open.length > 0 && stepsLeft-- > 0) {
     let bestPos = 0;

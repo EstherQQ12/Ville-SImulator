@@ -63,6 +63,8 @@ import {
 import { soundEngine } from '../utils/sound';
 import {
   findAdjacentRoadTile as pfFindAdjacentRoadTile,
+  findClosestReachableRoad as pfFindClosestReachableRoad,
+  findNearestRoadTile as pfFindNearestRoadTile,
   findNearestWalkableTile as pfFindNearestWalkableTile,
   findPedestrianPath as pfFindPedestrianPath,
   findRoadPath as pfFindRoadPath,
@@ -322,6 +324,68 @@ export class CitySimulation {
 
   private findAdjacentRoadTile(tiles: MapTile[], x: number, y: number) {
     return pfFindAdjacentRoadTile(tiles, x, y, this.gridCols, this.gridRows);
+  }
+
+  private findNearestRoadTile(tiles: MapTile[], x: number, y: number, maxRadius = 6) {
+    return pfFindNearestRoadTile(tiles, x, y, maxRadius, this.gridCols, this.gridRows);
+  }
+
+  private findClosestReachableRoad(
+    tiles: MapTile[],
+    start: GridPoint,
+    goalX: number,
+    goalY: number
+  ) {
+    return pfFindClosestReachableRoad(tiles, start, goalX, goalY, this.gridCols, this.gridRows);
+  }
+
+  private findBestPoliceDispatchRoute(destX: number, destY: number): {
+    station: PlacedBuilding;
+    roadPath: GridPoint[] | null;
+    fullRoadReached: boolean;
+  } | null {
+    const stations = this.buildingsList.filter((b) => b.category === 'police');
+    if (stations.length === 0) return null;
+
+    const sortedStations = [...stations].sort(
+      (a, b) => Math.hypot(a.x - destX, a.y - destY) - Math.hypot(b.x - destX, b.y - destY)
+    );
+
+    const destRoad = this.findNearestRoadTile(this.tiles, destX, destY, 6);
+    if (destRoad) {
+      for (const st of sortedStations) {
+        const startRoad = this.findNearestRoadTile(this.tiles, st.x, st.y, 4);
+        if (!startRoad) continue;
+        const roadPath = this.findRoadPath(this.tiles, startRoad, destRoad, 0.8);
+        if (roadPath && roadPath.length >= 1) {
+          return { station: st, roadPath, fullRoadReached: true };
+        }
+      }
+    }
+
+    // Fallback 1: No continuous road links the station to the target (e.g. far across water, broken bridge, or separate road).
+    // Drive cruiser along connected roads as close as possible, then deploy foot officers!
+    for (const st of sortedStations) {
+      const startRoad = this.findNearestRoadTile(this.tiles, st.x, st.y, 4);
+      if (!startRoad) continue;
+      const closestRoad = this.findClosestReachableRoad(this.tiles, startRoad, destX, destY);
+      if (!closestRoad) continue;
+      const roadPath = this.findRoadPath(this.tiles, startRoad, closestRoad, 0.8);
+      if (roadPath && roadPath.length >= 1) {
+        return { station: st, roadPath, fullRoadReached: false };
+      }
+    }
+
+    // Fallback 2: Police Station has no nearby road at all — dispatch foot officers directly
+    return { station: sortedStations[0], roadPath: null, fullRoadReached: false };
+  }
+
+  private findPoliceFootPath(start: GridPoint, goal: GridPoint): GridPoint[] | null {
+    const allowFrozen = this.season === 'Winter';
+    return (
+      this.findPedestrianPath(this.tiles, start, goal, allowFrozen, false) ||
+      this.findPedestrianPath(this.tiles, start, goal, allowFrozen, true)
+    );
   }
 
   private findNearestWalkableTile(
@@ -2045,11 +2109,93 @@ export class CitySimulation {
   }
 
   private updateRobberies(simDt: number, playAudio: boolean) {
+    // Step foot police officers responding to remote/off-road robberies
+    for (let pi = this.people.length - 1; pi >= 0; pi--) {
+      const officer = this.people[pi];
+      if (officer.role !== 'police' || !officer.targetRobberyId) continue;
+      const rob = this.robberies.find(
+        (r) => r.id === officer.targetRobberyId && r.status === 'active'
+      );
+      if (!rob) {
+        officer.targetRobberyId = undefined;
+        if (officer.homeBuildingId) {
+          officer.speed = 24;
+          if (!this.assignReturnRoute(officer)) this.people.splice(pi, 1);
+        } else {
+          this.people.splice(pi, 1);
+        }
+        continue;
+      }
+
+      const res = this.stepPersonAlongPath(officer, simDt, 9);
+      const dist = Math.hypot(
+        officer.wx - (rob.x + 0.5) * TILE_SIZE,
+        officer.wy - (rob.y + 0.5) * TILE_SIZE
+      );
+      if (res === 'arrived' || dist < 14) {
+        rob.status = 'caught';
+        rob.statusTimer = 4.0;
+        this.stoppedRobberies += 1;
+        this.sendToJail(1);
+        this.capturePopups.push({
+          wx: (rob.x + 0.5) * TILE_SIZE,
+          wy: (rob.y + 0.25) * TILE_SIZE,
+          age: 0,
+          maxAge: 1.5,
+        });
+        this.logDailyNews(
+          `HOT TAKE: That burglar in ${rob.neighbourhoodName} really thought nobody would spot a bright getaway sprint—Police bagged 'em in seconds!`
+        );
+        soundEngine.playPoliceResolved();
+        const cruiser = this.cars.find((c) => c.targetRobberyId === rob.id);
+        if (cruiser && !this.sendVehicleBackToStation(cruiser, undefined, true)) {
+          this.finishTrip(cruiser);
+          const ci = this.cars.indexOf(cruiser);
+          if (ci !== -1) this.cars.splice(ci, 1);
+        }
+        officer.targetRobberyId = undefined;
+        if (officer.homeBuildingId) {
+          officer.speed = 24;
+          if (!this.assignReturnRoute(officer)) this.people.splice(pi, 1);
+        } else {
+          this.people.splice(pi, 1);
+        }
+      } else if (res === 'blocked') {
+        const curPt = {
+          x: Math.max(0, Math.min(this.gridCols - 1, Math.floor(officer.wx / TILE_SIZE))),
+          y: Math.max(0, Math.min(this.gridRows - 1, Math.floor(officer.wy / TILE_SIZE))),
+        };
+        const retryPath = this.findPoliceFootPath(curPt, { x: rob.x, y: rob.y });
+        if (retryPath) {
+          officer.pedestrianPath = retryPath;
+          officer.pedestrianPathIndex = retryPath.length > 1 ? 1 : 0;
+        } else {
+          const dx = (rob.x + 0.5) * TILE_SIZE - officer.wx;
+          const dy = (rob.y + 0.5) * TILE_SIZE - officer.wy;
+          const d = Math.hypot(dx, dy);
+          if (d > 1) {
+            officer.wx += (dx / d) * officer.speed * simDt;
+            officer.wy += (dy / d) * officer.speed * simDt;
+            officer.animPhase += simDt * 10;
+          }
+        }
+      }
+    }
+
     // Update existing robbery timers
     for (let i = this.robberies.length - 1; i >= 0; i--) {
       const rob = this.robberies[i];
       if (rob.status === 'active') {
-        rob.elapsedSeconds += simDt;
+        if (rob.policeDispatched) {
+          const hasResponder =
+            this.cars.some((c) => c.targetRobberyId === rob.id) ||
+            this.people.some((p) => p.role === 'police' && p.targetRobberyId === rob.id);
+          if (!hasResponder) {
+            rob.policeDispatched = false;
+          }
+        }
+        // Give far-away dispatched cruisers enough travel time before the burglar slips away
+        rob.elapsedSeconds += rob.policeDispatched ? simDt * 0.35 : simDt;
         // Retry police dispatch if a player just built/connected a Police Station
         if (!rob.policeDispatched) {
           this.dispatchPoliceToRobbery(rob);
@@ -2057,6 +2203,12 @@ export class CitySimulation {
         if (rob.elapsedSeconds >= rob.escapeLimitSeconds) {
           rob.status = 'escaped';
           rob.statusTimer = 4.0;
+          const cruiser = this.cars.find((c) => c.targetRobberyId === rob.id);
+          if (cruiser && !this.sendVehicleBackToStation(cruiser, undefined, false)) {
+            this.finishTrip(cruiser);
+            const ci = this.cars.indexOf(cruiser);
+            if (ci !== -1) this.cars.splice(ci, 1);
+          }
         }
       } else {
         rob.statusTimer -= simDt;
@@ -2096,6 +2248,43 @@ export class CitySimulation {
     return this.spawnRobberyInNeighbourhood(nb, playAudio);
   }
 
+  public triggerRobberyAt(x: number, y: number, playAudio = true): RobberyIncident | null {
+    const tile = this.getTile(x, y);
+    const target = tile?.building;
+    if (!target || target.category === 'road_path') return null;
+    if (this.robberies.some((r) => r.buildingId === target.id && r.status === 'active')) {
+      return null;
+    }
+
+    // Clear any fading resolved robbery on this building so the new active robbery surfaces immediately
+    for (let i = this.robberies.length - 1; i >= 0; i--) {
+      if (this.robberies[i].buildingId === target.id && this.robberies[i].status !== 'active') {
+        this.robberies.splice(i, 1);
+      }
+    }
+
+    const nb = this.getNeighbourhoodForBuilding(target.id);
+    const incident: RobberyIncident = {
+      id: `rob_${this.robberyIdCounter++}`,
+      buildingId: target.id,
+      buildingName: target.name,
+      neighbourhoodId: nb?.id ?? 'custom',
+      neighbourhoodName: nb?.name ?? this.describeArea(target.x, target.y),
+      x: target.x,
+      y: target.y,
+      elapsedSeconds: 0,
+      escapeLimitSeconds: 75,
+      policeDispatched: false,
+      status: 'active',
+      statusTimer: 0,
+    };
+
+    this.robberies.push(incident);
+    if (playAudio) soundEngine.playRobberyAlert();
+    this.dispatchPoliceToRobbery(incident);
+    return incident;
+  }
+
   private spawnRobberyInNeighbourhood(nb: Neighbourhood, playAudio: boolean): RobberyIncident | null {
     const candidates = nb.houseIds
       .map((id) => this.buildingsList.find((b) => b.id === id))
@@ -2127,68 +2316,82 @@ export class CitySimulation {
   }
 
   private dispatchPoliceToRobbery(incident: RobberyIncident): boolean {
-    const stations = this.buildingsList.filter((b) => b.category === 'police');
-    if (stations.length === 0) return false;
+    const route = this.findBestPoliceDispatchRoute(incident.x, incident.y);
+    if (!route) return false;
 
-    const destRoad = this.findAdjacentRoadTile(this.tiles, incident.x, incident.y);
-    if (!destRoad) return false;
+    const { station, roadPath, fullRoadReached } = route;
+    if (roadPath && roadPath.length >= 1) {
+      const lastRoad = roadPath[roadPath.length - 1];
+      const closeEnough =
+        fullRoadReached &&
+        Math.hypot(lastRoad.x - incident.x, lastRoad.y - incident.y) <= 2.5;
+      const fullPath: GridPoint[] = closeEnough
+        ? [{ x: station.x, y: station.y }, ...roadPath, { x: incident.x, y: incident.y }]
+        : [{ x: station.x, y: station.y }, ...roadPath];
+      const p0 = fullPath[0];
+      const p1 = fullPath[1] || fullPath[0];
+      const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
 
-    // Pick closest road-connected police station
-    let bestStation: PlacedBuilding | null = null;
-    let bestPath: { x: number; y: number }[] | null = null;
+      const cruiser: Car = {
+        id: `car_${this.carIdCounter++}`,
+        type: 'police',
+        color: '#1E293B',
+        wx: (p0.x + 0.5) * TILE_SIZE,
+        wy: (p0.y + 0.5) * TILE_SIZE,
+        angle,
+        speed: 68,
+        maxSpeed: 132,
+        path: fullPath,
+        pathIndex: fullPath.length > 1 ? 1 : 0,
+        originBuildingId: station.id,
+        destBuildingId: incident.buildingId,
+        destLabel: incident.buildingName,
+        returnStationId: station.id,
+        originCategory: 'police',
+        destCategory: this.getTile(incident.x, incident.y)?.building?.category || 'residential',
+        waitSeconds: 0,
+        isBraking: false,
+        isJammed: false,
+        hornFlash: 0,
+        sirenPhase: 0,
+        targetRobberyId: incident.id,
+      };
 
-    const sortedStations = [...stations].sort(
-      (a, b) =>
-        Math.hypot(a.x - incident.x, a.y - incident.y) -
-        Math.hypot(b.x - incident.x, b.y - incident.y)
-    );
-
-    for (const st of sortedStations) {
-      const startRoad = this.findAdjacentRoadTile(this.tiles, st.x, st.y);
-      if (!startRoad) continue;
-      const path = this.findRoadPath(this.tiles, startRoad, destRoad, 0.8);
-      if (path && path.length >= 2) {
-        bestStation = st;
-        bestPath = path;
-        break;
-      }
+      station.activeTripsOut += 1;
+      this.cars.push(cruiser);
+      incident.policeDispatched = true;
+      incident.escapeLimitSeconds = Math.max(incident.escapeLimitSeconds, 110);
+      return true;
     }
 
-    if (!bestStation || !bestPath) return false;
-
-    const fullPath: GridPoint[] = [{ x: bestStation.x, y: bestStation.y }, ...bestPath, { x: incident.x, y: incident.y }];
-    const p0 = fullPath[0];
-    const p1 = fullPath[1];
-    const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
-
-    const cruiser: Car = {
-      id: `car_${this.carIdCounter++}`,
-      type: 'police',
-      color: '#1E293B',
-      wx: (p0.x + 0.5) * TILE_SIZE,
-      wy: (p0.y + 0.5) * TILE_SIZE,
-      angle,
-      speed: 48,
-      maxSpeed: 98,
-      path: fullPath,
-      pathIndex: 1,
-      originBuildingId: bestStation.id,
-      destBuildingId: incident.buildingId,
-      destLabel: incident.buildingName,
-      returnStationId: bestStation.id,
-      originCategory: 'police',
-      destCategory: 'residential',
-      waitSeconds: 0,
-      isBraking: false,
-      isJammed: false,
-      hornFlash: 0,
-      sirenPhase: 0,
+    // No road near Police Station — dispatch fast foot officer directly
+    const footPath = this.findPoliceFootPath(
+      { x: station.x, y: station.y },
+      { x: incident.x, y: incident.y }
+    );
+    if (!footPath) return false;
+    this.people.push({
+      id: `ppl_${this.personIdCounter++}`,
+      role: 'police',
+      wx: (station.x + 0.5) * TILE_SIZE,
+      wy: (station.y + 0.8) * TILE_SIZE,
+      targetWx: (incident.x + 0.5) * TILE_SIZE,
+      targetWy: (incident.y + 0.5) * TILE_SIZE,
+      targetTileX: incident.x,
+      targetTileY: incident.y,
+      pedestrianPath: footPath,
+      pedestrianPathIndex: footPath.length > 1 ? 1 : 0,
+      speed: 58,
+      shirtColor: '#1D4ED8',
+      hatColor: '#1E3A8A',
+      animPhase: 0,
+      state: 'chasing',
+      homeBuildingId: station.id,
       targetRobberyId: incident.id,
-    };
-
-    bestStation.activeTripsOut += 1;
-    this.cars.push(cruiser);
+      holdTimer: 0,
+    });
     incident.policeDispatched = true;
+    incident.escapeLimitSeconds = Math.max(incident.escapeLimitSeconds, 130);
     return true;
   }
 
@@ -3042,7 +3245,7 @@ export class CitySimulation {
       return true;
     }
 
-    // Police finishing robbery or escapee capture -> drive to Jail / Police Station instead of vanishing
+    // Police finishing robbery or escapee capture -> drive to Jail / Police Station (or deploy officer on foot if remote)
     if (
       car.type === 'police' &&
       (car.targetRobberyId || car.targetEscapeeId)
@@ -3050,30 +3253,102 @@ export class CitySimulation {
       if (car.targetRobberyId) {
         const rob = this.robberies.find((r) => r.id === car.targetRobberyId);
         if (rob && rob.status === 'active') {
-          rob.status = 'caught';
-          rob.statusTimer = 4.0;
-          this.stoppedRobberies += 1;
-          this.sendToJail(1);
-          this.logDailyNews(`HOT TAKE: That burglar in ${rob.neighbourhoodName} really thought nobody would spot a bright getaway sprint—Police bagged 'em in seconds!`);
-          soundEngine.playPoliceResolved();
+          const distToRob = Math.hypot(
+            car.wx - (rob.x + 0.5) * TILE_SIZE,
+            car.wy - (rob.y + 0.5) * TILE_SIZE
+          );
+          if (distToRob <= TILE_SIZE * 3.4) {
+            rob.status = 'caught';
+            rob.statusTimer = 4.0;
+            this.stoppedRobberies += 1;
+            this.sendToJail(1);
+            this.logDailyNews(`HOT TAKE: That burglar in ${rob.neighbourhoodName} really thought nobody would spot a bright getaway sprint—Police bagged 'em in seconds!`);
+            soundEngine.playPoliceResolved();
+          } else {
+            // Cruiser reached closest road across a river/gap — deploy officer on foot to finish the arrest!
+            car.parkedAtRaid = true;
+            car.speed = 0;
+            car.isBraking = false;
+            car.isJammed = false;
+            car.waitSeconds = 0;
+            const hasFoot = this.people.some(
+              (p) => p.role === 'police' && p.targetRobberyId === rob.id
+            );
+            if (!hasFoot) {
+              const cx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(car.wx / TILE_SIZE)));
+              const cy = Math.max(0, Math.min(this.gridRows - 1, Math.floor(car.wy / TILE_SIZE)));
+              const path = this.findPoliceFootPath({ x: cx, y: cy }, { x: rob.x, y: rob.y });
+              this.people.push({
+                id: `ppl_${this.personIdCounter++}`,
+                role: 'police',
+                wx: car.wx,
+                wy: car.wy,
+                targetWx: (rob.x + 0.5) * TILE_SIZE,
+                targetWy: (rob.y + 0.5) * TILE_SIZE,
+                targetTileX: rob.x,
+                targetTileY: rob.y,
+                pedestrianPath: path ? [...path] : undefined,
+                pedestrianPathIndex: path && path.length > 1 ? 1 : 0,
+                speed: 58,
+                shirtColor: '#1D4ED8',
+                hatColor: '#1E3A8A',
+                animPhase: 0,
+                state: 'chasing',
+                targetRobberyId: rob.id,
+                holdTimer: 0,
+              });
+            }
+            return true;
+          }
         }
       }
       if (car.targetEscapeeId) {
         const escIdx = this.people.findIndex((p) => p.id === car.targetEscapeeId);
         if (escIdx !== -1) {
           const esc = this.people[escIdx];
-          this.people.splice(escIdx, 1);
-          this.sendToJail(1);
-          this.floatingLabels.push({
-            wx: esc.wx,
-            wy: esc.wy - 10,
-            text: 'Recaptured!',
-            color: '#F8FAFC',
-            bgColor: '#1D4ED8',
-            age: 0,
-            maxAge: 1.5,
-          });
-          soundEngine.playPoliceCapture();
+          const distToEsc = Math.hypot(car.wx - esc.wx, car.wy - esc.wy);
+          if (distToEsc <= TILE_SIZE * 4.5) {
+            this.people.splice(escIdx, 1);
+            this.sendToJail(1);
+            this.floatingLabels.push({
+              wx: esc.wx,
+              wy: esc.wy - 10,
+              text: 'Recaptured!',
+              color: '#F8FAFC',
+              bgColor: '#1D4ED8',
+              age: 0,
+              maxAge: 1.5,
+            });
+            soundEngine.playPoliceCapture();
+          } else {
+            // Escapee ran further away/off-road while cruiser drove in — deploy chasing officer on foot!
+            const cx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(car.wx / TILE_SIZE)));
+            const cy = Math.max(0, Math.min(this.gridRows - 1, Math.floor(car.wy / TILE_SIZE)));
+            const ex = Math.max(0, Math.min(this.gridCols - 1, Math.floor(esc.wx / TILE_SIZE)));
+            const ey = Math.max(0, Math.min(this.gridRows - 1, Math.floor(esc.wy / TILE_SIZE)));
+            const path = this.findPoliceFootPath({ x: cx, y: cy }, { x: ex, y: ey });
+            this.people.push({
+              id: `ppl_${this.personIdCounter++}`,
+              role: 'police',
+              wx: car.wx,
+              wy: car.wy,
+              targetWx: esc.wx,
+              targetWy: esc.wy,
+              targetTileX: ex,
+              targetTileY: ey,
+              pedestrianPath: path ? [...path] : undefined,
+              pedestrianPathIndex: path && path.length > 1 ? 1 : 0,
+              speed: 62,
+              shirtColor: '#1D4ED8',
+              hatColor: '#1E3A8A',
+              animPhase: 0,
+              state: 'chasing',
+              homeBuildingId: car.returnStationId || car.originBuildingId,
+              targetPersonId: esc.id,
+              holdTimer: 0,
+            });
+            return this.sendVehicleBackToStation(car, undefined, false);
+          }
         }
       }
       return this.sendVehicleBackToStation(car, undefined, true);
@@ -3120,8 +3395,8 @@ export class CitySimulation {
     const startRoad =
       currTile && currTile.hasRoad
         ? { x: currTileX, y: currTileY }
-        : this.findAdjacentRoadTile(this.tiles, currTileX, currTileY);
-    const destRoad = this.findAdjacentRoadTile(this.tiles, firstTarget.x, firstTarget.y);
+        : this.findNearestRoadTile(this.tiles, currTileX, currTileY, 4);
+    const destRoad = this.findNearestRoadTile(this.tiles, firstTarget.x, firstTarget.y, 4);
     if (!startRoad || !destRoad) return false;
 
     const roadPath = this.findRoadPath(this.tiles, startRoad, destRoad, 0.9);
@@ -3451,7 +3726,13 @@ export class CitySimulation {
 
       // Stationed personnel idling/patrolling at Police Stations, Firehouses, and Hospitals
       if (
-        (p.role === 'police' && p.homeBuildingId && !p.protestId && !p.raidStallId) ||
+        (p.role === 'police' &&
+          p.homeBuildingId &&
+          !p.protestId &&
+          !p.raidStallId &&
+          !p.targetRobberyId &&
+          !p.targetPersonId &&
+          !p.targetCrashId) ||
         (p.role === 'firefighter' && p.homeBuildingId && !p.fireId) ||
         (p.role === 'medic' && p.homeBuildingId)
       ) {
@@ -5137,25 +5418,16 @@ export class CitySimulation {
   }
 
   private dispatchPoliceToEscapee(escapee: Person): boolean {
-    const stations = this.buildingsList.filter((b) => b.category === 'police');
-    if (stations.length === 0) return false;
     const escX = Math.max(0, Math.min(this.gridCols - 1, Math.floor(escapee.wx / TILE_SIZE)));
     const escY = Math.max(0, Math.min(this.gridRows - 1, Math.floor(escapee.wy / TILE_SIZE)));
-    const destRoad = this.findAdjacentRoadTile(this.tiles, escX, escY);
-    if (!destRoad) return false;
+    const route = this.findBestPoliceDispatchRoute(escX, escY);
+    if (!route) return false;
 
-    const sorted = [...stations].sort(
-      (a, b) => Math.hypot(a.x - escX, a.y - escY) - Math.hypot(b.x - escX, b.y - escY)
-    );
-    for (const st of sorted) {
-      const startRoad = this.findAdjacentRoadTile(this.tiles, st.x, st.y);
-      if (!startRoad) continue;
-      const path = this.findRoadPath(this.tiles, startRoad, destRoad, 0.8);
-      if (!path || path.length < 1) continue;
-
-      const fullPath: GridPoint[] = [{ x: st.x, y: st.y }, ...path];
+    const { station, roadPath } = route;
+    if (roadPath && roadPath.length >= 1) {
+      const fullPath: GridPoint[] = [{ x: station.x, y: station.y }, ...roadPath];
       const p0 = fullPath[0];
-      const p1 = fullPath[1];
+      const p1 = fullPath[1] || fullPath[0];
       const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
 
       const cruiser: Car = {
@@ -5165,14 +5437,14 @@ export class CitySimulation {
         wx: (p0.x + 0.5) * TILE_SIZE,
         wy: (p0.y + 0.5) * TILE_SIZE,
         angle,
-        speed: 52,
-        maxSpeed: 100,
+        speed: 70,
+        maxSpeed: 136,
         path: fullPath,
-        pathIndex: 1,
-        originBuildingId: st.id,
-        destBuildingId: st.id,
+        pathIndex: fullPath.length > 1 ? 1 : 0,
+        originBuildingId: station.id,
+        destBuildingId: station.id,
         destLabel: 'Escaped Inmate',
-        returnStationId: st.id,
+        returnStationId: station.id,
         originCategory: 'police',
         destCategory: 'police',
         waitSeconds: 0,
@@ -5182,11 +5454,35 @@ export class CitySimulation {
         sirenPhase: 0,
         targetEscapeeId: escapee.id,
       };
-      st.activeTripsOut += 1;
+      station.activeTripsOut += 1;
       this.cars.push(cruiser);
       return true;
     }
-    return false;
+
+    // Fallback: dispatch chasing officer on foot directly from Police Station
+    const path = this.findPoliceFootPath({ x: station.x, y: station.y }, { x: escX, y: escY });
+    if (!path) return false;
+    this.people.push({
+      id: `ppl_${this.personIdCounter++}`,
+      role: 'police',
+      wx: (station.x + 0.5) * TILE_SIZE,
+      wy: (station.y + 0.8) * TILE_SIZE,
+      targetWx: escapee.wx,
+      targetWy: escapee.wy,
+      targetTileX: escX,
+      targetTileY: escY,
+      pedestrianPath: path,
+      pedestrianPathIndex: path.length > 1 ? 1 : 0,
+      speed: 62,
+      shirtColor: '#1D4ED8',
+      hatColor: '#1E3A8A',
+      animPhase: 0,
+      state: 'chasing',
+      homeBuildingId: station.id,
+      targetPersonId: escapee.id,
+      holdTimer: 0,
+    });
+    return true;
   }
 
   private pickEscapeeTarget(esc: Person): boolean {
@@ -5239,6 +5535,58 @@ export class CitySimulation {
   }
 
   private updateJailAndReleases(simDt: number, realDt: number, playAudio: boolean) {
+    // 0. Step foot police officers chasing escaped inmates
+    for (let oi = this.people.length - 1; oi >= 0; oi--) {
+      const officer = this.people[oi];
+      if (
+        officer.role !== 'police' ||
+        !officer.targetPersonId ||
+        officer.protestId ||
+        officer.raidStallId
+      ) {
+        continue;
+      }
+      const escIdx = this.people.findIndex(
+        (p) => p.id === officer.targetPersonId && p.role === 'escapee'
+      );
+      if (escIdx === -1) {
+        officer.targetPersonId = undefined;
+        if (officer.homeBuildingId) {
+          officer.speed = 24;
+          if (!this.assignReturnRoute(officer)) this.people.splice(oi, 1);
+        } else {
+          this.people.splice(oi, 1);
+        }
+        continue;
+      }
+      const esc = this.people[escIdx];
+      const dist = Math.hypot(esc.wx - officer.wx, esc.wy - officer.wy);
+      if (dist < 11) {
+        this.people.splice(escIdx, 1);
+        if (escIdx < oi) oi -= 1;
+        this.sendToJail(1);
+        this.capturePopups.push({ wx: esc.wx, wy: esc.wy - 8, age: 0, maxAge: 1.4 });
+        this.logDailyNews(
+          'WILD CHASE: Police caught an escaped inmate hiding inside a bush—turned out they only wanted one last snack before going back to Jail!'
+        );
+        if (playAudio) soundEngine.playPoliceCapture();
+        officer.targetPersonId = undefined;
+        if (officer.homeBuildingId) {
+          officer.speed = 24;
+          if (!this.assignReturnRoute(officer)) this.people.splice(oi, 1);
+        } else {
+          this.people.splice(oi, 1);
+        }
+        continue;
+      }
+      const dx = esc.wx - officer.wx;
+      const dy = esc.wy - officer.wy;
+      const step = Math.min(dist, Math.max(58, officer.speed) * realDt);
+      officer.wx += (dx / dist) * step;
+      officer.wy += (dy / dist) * step;
+      officer.animPhase += realDt * 12;
+    }
+
     // 1. Step escaped prisoners robbing & vandalizing public properties
     for (let i = this.people.length - 1; i >= 0; i--) {
       const esc = this.people[i];
@@ -5249,6 +5597,20 @@ export class CitySimulation {
         if (!this.assignReturnRoute(esc)) {
           this.people.splice(i, 1);
           continue;
+        }
+      }
+
+      // Retry police dispatch if no cruiser or chasing officer is currently after this escapee
+      const hasAssignedPolice =
+        this.cars.some((c) => c.targetEscapeeId === esc.id) ||
+        this.people.some(
+          (p) => p.role === 'police' && p.targetPersonId === esc.id && !p.protestId
+        );
+      if (!hasAssignedPolice) {
+        esc.rerouteCooldown = (esc.rerouteCooldown ?? 0) - simDt;
+        if (esc.rerouteCooldown <= 0) {
+          esc.rerouteCooldown = 2.5;
+          this.dispatchPoliceToEscapee(esc);
         }
       }
 
@@ -5931,8 +6293,8 @@ export class CitySimulation {
   }
 
   private triggerPoliceRaidOnStall(stall: MarketStall, playAudio: boolean): boolean {
-    const stations = this.buildingsList.filter((b) => b.category === 'police');
-    if (stations.length === 0) return false;
+    const route = this.findBestPoliceDispatchRoute(stall.x, stall.y);
+    if (!route) return false;
     stall.raidDispatched = true;
 
     this.floatingLabels.push({
@@ -5946,102 +6308,70 @@ export class CitySimulation {
     });
     if (playAudio) soundEngine.playRobberyAlert();
 
-    // Find closest road tile to the remote illicit stall
-    let nearestRoad: GridPoint | null = null;
-    let bestRoadDist = Infinity;
-    for (const t of this.tiles) {
-      if (!t.hasRoad) continue;
-      const d = Math.hypot(t.x - stall.x, t.y - stall.y);
-      if (d < bestRoadDist) {
-        bestRoadDist = d;
-        nearestRoad = { x: t.x, y: t.y };
-      }
-    }
-
-    const sortedStations = [...stations].sort(
-      (a, b) => Math.hypot(a.x - stall.x, a.y - stall.y) - Math.hypot(b.x - stall.x, b.y - stall.y)
-    );
-
-    if (nearestRoad) {
-      for (const st of sortedStations) {
-        const startRoad = this.findAdjacentRoadTile(this.tiles, st.x, st.y);
-        if (!startRoad) continue;
-        const path = this.findRoadPath(this.tiles, startRoad, nearestRoad, 0.8);
-        if (!path || path.length < 2) continue;
-        const pedCheck = this.findPedestrianPath(
-          this.tiles,
-          this.findNearestWalkableTile(this.tiles, nearestRoad.x, nearestRoad.y, 1) || nearestRoad,
-          { x: stall.x, y: stall.y }
-        );
-        if (!pedCheck) continue;
-
-        const fullPath: GridPoint[] = [{ x: st.x, y: st.y }, ...path];
-        const p0 = fullPath[0];
-        const p1 = fullPath[1];
-        const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
-        const carId = `car_${this.carIdCounter++}`;
-        const cruiser: Car = {
-          id: carId,
-          type: 'police',
-          color: '#1E293B',
-          wx: (p0.x + 0.5) * TILE_SIZE,
-          wy: (p0.y + 0.5) * TILE_SIZE,
-          angle,
-          speed: 45,
-          maxSpeed: 96,
-          path: fullPath,
-          pathIndex: 1,
-          originBuildingId: st.id,
-          destBuildingId: st.id,
-          destLabel: 'Illicit Stall Raid',
-          returnStationId: st.id,
-          originCategory: 'police',
-          destCategory: 'police',
-          waitSeconds: 0,
-          isBraking: false,
-          isJammed: false,
-          hornFlash: 0,
-          sirenPhase: 0,
-          targetRaidStallId: stall.id,
-        };
-        st.activeTripsOut += 1;
-        this.cars.push(cruiser);
-        stall.raidCarId = carId;
-        this.logDailyNews(`SCANDAL: Police busted a secret outskirts stall selling "definitely normal mystery juice"—half the customers claim they were "just looking!"`);
-        return true;
-      }
-    }
-
-    // Fallback: send raid officers directly on foot from nearest Police Station
-    for (const st of sortedStations) {
-      const path = this.findPedestrianPath(this.tiles, { x: st.x, y: st.y }, { x: stall.x, y: stall.y });
-      if (!path) continue;
-      for (let k = 0; k < 2; k++) {
-        this.people.push({
-          id: `ppl_${this.personIdCounter++}`,
-          role: 'police',
-          wx: (st.x + 0.5) * TILE_SIZE + (k === 0 ? -4 : 4),
-          wy: (st.y + 0.78) * TILE_SIZE,
-          targetWx: stall.wx,
-          targetWy: stall.wy,
-          targetTileX: stall.x,
-          targetTileY: stall.y,
-          pedestrianPath: [...path],
-          pedestrianPathIndex: path.length > 1 ? 1 : 0,
-          speed: 46,
-          shirtColor: '#1D4ED8',
-          hatColor: '#1E3A8A',
-          animPhase: k * Math.PI,
-          state: 'chasing',
-          homeBuildingId: st.id,
-          raidStallId: stall.id,
-          holdTimer: 0,
-        });
-      }
+    const { station, roadPath } = route;
+    if (roadPath && roadPath.length >= 1) {
+      const fullPath: GridPoint[] = [{ x: station.x, y: station.y }, ...roadPath];
+      const p0 = fullPath[0];
+      const p1 = fullPath[1] || fullPath[0];
+      const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+      const carId = `car_${this.carIdCounter++}`;
+      const cruiser: Car = {
+        id: carId,
+        type: 'police',
+        color: '#1E293B',
+        wx: (p0.x + 0.5) * TILE_SIZE,
+        wy: (p0.y + 0.5) * TILE_SIZE,
+        angle,
+        speed: 66,
+        maxSpeed: 130,
+        path: fullPath,
+        pathIndex: fullPath.length > 1 ? 1 : 0,
+        originBuildingId: station.id,
+        destBuildingId: station.id,
+        destLabel: 'Illicit Stall Raid',
+        returnStationId: station.id,
+        originCategory: 'police',
+        destCategory: 'police',
+        waitSeconds: 0,
+        isBraking: false,
+        isJammed: false,
+        hornFlash: 0,
+        sirenPhase: 0,
+        targetRaidStallId: stall.id,
+      };
+      station.activeTripsOut += 1;
+      this.cars.push(cruiser);
+      stall.raidCarId = carId;
+      this.logDailyNews(`SCANDAL: Police busted a secret outskirts stall selling "definitely normal mystery juice"—half the customers claim they were "just looking!"`);
       return true;
     }
 
-    return false;
+    // Fallback: send raid officers directly on foot from nearest Police Station
+    const path = this.findPoliceFootPath({ x: station.x, y: station.y }, { x: stall.x, y: stall.y });
+    if (!path) return false;
+    for (let k = 0; k < 2; k++) {
+      this.people.push({
+        id: `ppl_${this.personIdCounter++}`,
+        role: 'police',
+        wx: (station.x + 0.5) * TILE_SIZE + (k === 0 ? -4 : 4),
+        wy: (station.y + 0.78) * TILE_SIZE,
+        targetWx: stall.wx,
+        targetWy: stall.wy,
+        targetTileX: stall.x,
+        targetTileY: stall.y,
+        pedestrianPath: [...path],
+        pedestrianPathIndex: path.length > 1 ? 1 : 0,
+        speed: 54,
+        shirtColor: '#1D4ED8',
+        hatColor: '#1E3A8A',
+        animPhase: k * Math.PI,
+        state: 'chasing',
+        homeBuildingId: station.id,
+        raidStallId: stall.id,
+        holdTimer: 0,
+      });
+    }
+    return true;
   }
 
   private handleRaidCarArrival(car: Car): boolean {
@@ -6059,10 +6389,10 @@ export class CitySimulation {
       (p) => p.role === 'police' && p.raidStallId === stall.id
     ).length;
     if (existingOfficers === 0) {
-      const tx = Math.floor(car.wx / TILE_SIZE);
-      const ty = Math.floor(car.wy / TILE_SIZE);
+      const tx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(car.wx / TILE_SIZE)));
+      const ty = Math.max(0, Math.min(this.gridRows - 1, Math.floor(car.wy / TILE_SIZE)));
       const walkStart = this.findNearestWalkableTile(this.tiles, tx, ty, 1) || { x: tx, y: ty };
-      const path = this.findPedestrianPath(this.tiles, walkStart, { x: stall.x, y: stall.y });
+      const path = this.findPoliceFootPath(walkStart, { x: stall.x, y: stall.y });
       for (let k = 0; k < 2; k++) {
         this.people.push({
           id: `ppl_${this.personIdCounter++}`,
@@ -6075,7 +6405,7 @@ export class CitySimulation {
           targetTileY: stall.y,
           pedestrianPath: path ? [...path] : undefined,
           pedestrianPathIndex: path && path.length > 1 ? 1 : 0,
-          speed: 48,
+          speed: 54,
           shirtColor: '#1D4ED8',
           hatColor: '#1E3A8A',
           animPhase: k * Math.PI,
@@ -8546,6 +8876,17 @@ export class CitySimulation {
         } else {
           prot.elapsedSeconds += simDt;
 
+          if (prot.policeDispatched && !prot.policeArrived) {
+            const hasCar = prot.policeCarId && this.cars.some((c) => c.id === prot.policeCarId);
+            const hasFoot = this.people.some(
+              (p) => p.role === 'police' && p.protestId === prot.id
+            );
+            if (!hasCar && !hasFoot) {
+              prot.policeDispatched = false;
+              prot.policeCarId = undefined;
+            }
+          }
+
           if (!prot.policeDispatched) {
             this.dispatchPoliceToProtest(prot);
           }
@@ -8882,69 +9223,71 @@ export class CitySimulation {
   }
 
   private dispatchPoliceToProtest(incident: ProtestIncident): boolean {
-    const stations = this.buildingsList.filter((b) => b.category === 'police');
-    if (stations.length === 0) return false;
+    const route = this.findBestPoliceDispatchRoute(incident.x, incident.y);
+    if (!route) return false;
 
-    const destRoad = this.findAdjacentRoadTile(this.tiles, incident.x, incident.y);
-    if (!destRoad) return false;
+    const { station, roadPath } = route;
+    if (roadPath && roadPath.length >= 1) {
+      const fullPath: GridPoint[] = [{ x: station.x, y: station.y }, ...roadPath];
+      const p0 = fullPath[0];
+      const p1 = fullPath[1] || fullPath[0];
+      const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
 
-    let bestStation: PlacedBuilding | null = null;
-    let bestPath: { x: number; y: number }[] | null = null;
+      const carId = `car_${this.carIdCounter++}`;
+      const cruiser: Car = {
+        id: carId,
+        type: 'police',
+        color: '#1E293B',
+        wx: (p0.x + 0.5) * TILE_SIZE,
+        wy: (p0.y + 0.5) * TILE_SIZE,
+        angle,
+        speed: 66,
+        maxSpeed: 128,
+        path: fullPath,
+        pathIndex: fullPath.length > 1 ? 1 : 0,
+        originBuildingId: station.id,
+        destBuildingId: incident.cityHallId,
+        destLabel: incident.cityHallName,
+        returnStationId: station.id,
+        originCategory: 'police',
+        destCategory: 'city_hall',
+        waitSeconds: 0,
+        isBraking: false,
+        isJammed: false,
+        hornFlash: 0,
+        sirenPhase: 0,
+        targetProtestId: incident.id,
+      };
 
-    const sortedStations = [...stations].sort(
-      (a, b) =>
-        Math.hypot(a.x - incident.x, a.y - incident.y) -
-        Math.hypot(b.x - incident.x, b.y - incident.y)
-    );
-
-    for (const st of sortedStations) {
-      const startRoad = this.findAdjacentRoadTile(this.tiles, st.x, st.y);
-      if (!startRoad) continue;
-      const path = this.findRoadPath(this.tiles, startRoad, destRoad, 0.8);
-      if (path && path.length >= 2) {
-        bestStation = st;
-        bestPath = path;
-        break;
-      }
+      station.activeTripsOut += 1;
+      this.cars.push(cruiser);
+      incident.policeDispatched = true;
+      incident.policeCarId = carId;
+      incident.durationLimitSeconds = Math.max(incident.durationLimitSeconds, 95);
+      return true;
     }
 
-    if (!bestStation || !bestPath) return false;
-
-    const fullPath: GridPoint[] = [{ x: bestStation.x, y: bestStation.y }, ...bestPath];
-    const p0 = fullPath[0];
-    const p1 = fullPath[1];
-    const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
-
-    const carId = `car_${this.carIdCounter++}`;
-    const cruiser: Car = {
-      id: carId,
-      type: 'police',
-      color: '#1E293B',
-      wx: (p0.x + 0.5) * TILE_SIZE,
-      wy: (p0.y + 0.5) * TILE_SIZE,
-      angle,
-      speed: 45,
-      maxSpeed: 94,
-      path: fullPath,
-      pathIndex: 1,
-      originBuildingId: bestStation.id,
-      destBuildingId: incident.cityHallId,
-      destLabel: incident.cityHallName,
-      returnStationId: bestStation.id,
-      originCategory: 'police',
-      destCategory: 'city_hall',
-      waitSeconds: 0,
-      isBraking: false,
-      isJammed: false,
-      hornFlash: 0,
-      sirenPhase: 0,
-      targetProtestId: incident.id,
-    };
-
-    bestStation.activeTripsOut += 1;
-    this.cars.push(cruiser);
+    // No road near Police Station — deploy foot officers straight to City Hall protest
     incident.policeDispatched = true;
-    incident.policeCarId = carId;
+    incident.policeArrived = true;
+    incident.durationLimitSeconds = Math.max(incident.durationLimitSeconds, 110);
+    for (let k = 0; k < 2; k++) {
+      this.people.push({
+        id: `ppl_${this.personIdCounter++}`,
+        role: 'police',
+        wx: (station.x + 0.5) * TILE_SIZE + (k === 0 ? -5 : 5),
+        wy: (station.y + 0.8) * TILE_SIZE,
+        targetWx: (incident.x + 0.5) * TILE_SIZE,
+        targetWy: (incident.y + 0.5) * TILE_SIZE,
+        speed: 56,
+        shirtColor: '#1D4ED8',
+        hatColor: '#1E3A8A',
+        animPhase: k * Math.PI,
+        state: 'chasing',
+        protestId: incident.id,
+        holdTimer: 0,
+      });
+    }
     return true;
   }
 
@@ -9699,10 +10042,23 @@ export class CitySimulation {
     });
   }
 
+  public triggerFireAt(x: number, y: number, playAudio = true): FireIncident | null {
+    const tile = this.getTile(x, y);
+    if (!tile || !tile.building || tile.building.category === 'road_path') return null;
+    return this.startFireAt(x, y, false, playAudio);
+  }
+
   private startFireAt(x: number, y: number, byArsonist: boolean, playAudio: boolean): FireIncident | null {
     const tile = this.getTile(x, y);
     if (!tile || tile.terrain === 'water' || tile.hasRoad) return null;
     if (this.fires.some((f) => f.x === x && f.y === y && f.status === 'active')) return null;
+
+    // Remove any fading resolved fire on this tile so the new active fire appears immediately
+    for (let i = this.fires.length - 1; i >= 0; i--) {
+      if (this.fires[i].x === x && this.fires[i].y === y && this.fires[i].status !== 'active') {
+        this.fires.splice(i, 1);
+      }
+    }
 
     const isHouse = tile.building?.category === 'residential';
     const targetType: FireIncident['targetType'] = isHouse
@@ -9816,7 +10172,7 @@ export class CitySimulation {
       destLabel: fire.buildingName,
       returnStationId: bestStation.id,
       originCategory: 'fire_station',
-      destCategory: 'residential',
+      destCategory: this.getTile(fire.x, fire.y)?.building?.category || 'residential',
       waitSeconds: 0,
       isBraking: false,
       isJammed: false,
@@ -9913,6 +10269,45 @@ export class CitySimulation {
   }
 
   private updateCarCrashes(simDt: number, realDt: number, playAudio: boolean) {
+    // Step any foot police officers responding to a remote/disconnected crash
+    for (let pi = this.people.length - 1; pi >= 0; pi--) {
+      const officer = this.people[pi];
+      if (officer.role !== 'police' || !officer.targetCrashId) continue;
+      const crash = this.crashes.find(
+        (c) => c.id === officer.targetCrashId && c.status === 'active'
+      );
+      if (!crash) {
+        officer.targetCrashId = undefined;
+        if (officer.homeBuildingId) {
+          officer.speed = 24;
+          if (!this.assignReturnRoute(officer)) this.people.splice(pi, 1);
+        } else {
+          this.people.splice(pi, 1);
+        }
+        continue;
+      }
+      const res = this.stepPersonAlongPath(officer, realDt, 9);
+      if (res === 'arrived' || Math.hypot(officer.wx - crash.wx, officer.wy - crash.wy) < 16) {
+        crash.policeArrived = true;
+        officer.targetCrashId = undefined;
+        if (officer.homeBuildingId) {
+          officer.speed = 24;
+          if (!this.assignReturnRoute(officer)) this.people.splice(pi, 1);
+        } else {
+          this.people.splice(pi, 1);
+        }
+      } else if (res === 'blocked') {
+        const dx = crash.wx - officer.wx;
+        const dy = crash.wy - officer.wy;
+        const d = Math.hypot(dx, dy);
+        if (d > 1) {
+          officer.wx += (dx / d) * officer.speed * realDt;
+          officer.wy += (dy / d) * officer.speed * realDt;
+          officer.animPhase += realDt * 10;
+        }
+      }
+    }
+
     for (let i = this.crashes.length - 1; i >= 0; i--) {
       const crash = this.crashes[i];
       if (crash.status === 'active') {
@@ -10236,8 +10631,79 @@ export class CitySimulation {
     crash: CrashIncident,
     vehicleType: 'ambulance' | 'police'
   ): boolean {
-    const category: BuildingCategory = vehicleType === 'ambulance' ? 'hospital' : 'police';
-    const stations = this.buildingsList.filter((b) => b.category === category);
+    if (vehicleType === 'police') {
+      const route = this.findBestPoliceDispatchRoute(crash.x, crash.y);
+      if (!route) return false;
+      const { station, roadPath } = route;
+      if (roadPath && roadPath.length >= 1) {
+        const fullPath: GridPoint[] = [{ x: station.x, y: station.y }, ...roadPath];
+        const p0 = fullPath[0];
+        const p1 = fullPath[1] || fullPath[0];
+        const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+
+        const carId = `car_${this.carIdCounter++}`;
+        const responder: Car = {
+          id: carId,
+          type: 'police',
+          color: '#1E3A8A',
+          wx: (p0.x + 0.5) * TILE_SIZE,
+          wy: (p0.y + 0.5) * TILE_SIZE,
+          angle,
+          speed: 68,
+          maxSpeed: 132,
+          path: fullPath,
+          pathIndex: fullPath.length > 1 ? 1 : 0,
+          originBuildingId: station.id,
+          destBuildingId: station.id,
+          destLabel: 'Traffic Crash',
+          returnStationId: station.id,
+          originCategory: 'police',
+          destCategory: 'police',
+          waitSeconds: 0,
+          isBraking: false,
+          isJammed: false,
+          hornFlash: 0,
+          sirenPhase: 0,
+          targetCrashId: crash.id,
+        };
+
+        station.activeTripsOut += 1;
+        this.cars.push(responder);
+        crash.responderCarIds.push(carId);
+        crash.policeDispatched = true;
+        return true;
+      }
+
+      const footPath = this.findPoliceFootPath(
+        { x: station.x, y: station.y },
+        { x: crash.x, y: crash.y }
+      );
+      if (!footPath) return false;
+      this.people.push({
+        id: `ppl_${this.personIdCounter++}`,
+        role: 'police',
+        wx: (station.x + 0.5) * TILE_SIZE,
+        wy: (station.y + 0.8) * TILE_SIZE,
+        targetWx: crash.wx,
+        targetWy: crash.wy,
+        targetTileX: crash.x,
+        targetTileY: crash.y,
+        pedestrianPath: footPath,
+        pedestrianPathIndex: footPath.length > 1 ? 1 : 0,
+        speed: 56,
+        shirtColor: '#1D4ED8',
+        hatColor: '#1E3A8A',
+        animPhase: 0,
+        state: 'chasing',
+        homeBuildingId: station.id,
+        targetCrashId: crash.id,
+        holdTimer: 0,
+      });
+      crash.policeDispatched = true;
+      return true;
+    }
+
+    const stations = this.buildingsList.filter((b) => b.category === 'hospital');
     if (stations.length === 0) return false;
 
     const destRoad = { x: crash.x, y: crash.y };
@@ -10248,34 +10714,34 @@ export class CitySimulation {
     );
 
     for (const st of sorted) {
-      const startRoad = this.findAdjacentRoadTile(this.tiles, st.x, st.y);
+      const startRoad = this.findNearestRoadTile(this.tiles, st.x, st.y, 4);
       if (!startRoad) continue;
       const path = this.findRoadPath(this.tiles, startRoad, destRoad, 0.8);
       if (!path || path.length < 1) continue;
 
       const fullPath: GridPoint[] = [{ x: st.x, y: st.y }, ...path];
       const p0 = fullPath[0];
-      const p1 = fullPath[1];
+      const p1 = fullPath[1] || fullPath[0];
       const angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
 
       const carId = `car_${this.carIdCounter++}`;
       const responder: Car = {
         id: carId,
-        type: vehicleType,
-        color: vehicleType === 'ambulance' ? '#F8FAFC' : '#1E3A8A',
+        type: 'ambulance',
+        color: '#F8FAFC',
         wx: (p0.x + 0.5) * TILE_SIZE,
         wy: (p0.y + 0.5) * TILE_SIZE,
         angle,
-        speed: 45,
-        maxSpeed: 94,
+        speed: 58,
+        maxSpeed: 118,
         path: fullPath,
-        pathIndex: 1,
+        pathIndex: fullPath.length > 1 ? 1 : 0,
         originBuildingId: st.id,
         destBuildingId: st.id,
         destLabel: 'Traffic Crash',
         returnStationId: st.id,
-        originCategory: category,
-        destCategory: category,
+        originCategory: 'hospital',
+        destCategory: 'hospital',
         waitSeconds: 0,
         isBraking: false,
         isJammed: false,
@@ -10287,8 +10753,7 @@ export class CitySimulation {
       st.activeTripsOut += 1;
       this.cars.push(responder);
       crash.responderCarIds.push(carId);
-      if (vehicleType === 'ambulance') crash.ambulanceDispatched = true;
-      else crash.policeDispatched = true;
+      crash.ambulanceDispatched = true;
       return true;
     }
 

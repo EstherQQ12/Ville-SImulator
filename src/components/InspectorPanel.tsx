@@ -88,6 +88,8 @@ interface InspectorPanelProps {
   onDeleteTile: (x: number, y: number) => void;
   onUpdateIntersection: (x: number, y: number, cfg: Partial<RoadIntersectionConfig>) => void;
   onTriggerProtest: (x: number, y: number) => void;
+  onTriggerRobbery: (x: number, y: number) => void;
+  onTriggerFire: (x: number, y: number) => void;
   onHostCityEvent: (x: number, y: number, type: CityEventType) => void;
   onTriggerCrisis: (type: CrisisType) => void;
   onTriggerNuke: () => void;
@@ -143,6 +145,8 @@ export function InspectorPanel({
   onDeleteTile,
   onUpdateIntersection,
   onTriggerProtest,
+  onTriggerRobbery,
+  onTriggerFire,
   onHostCityEvent,
   onTriggerCrisis,
   onTriggerNuke,
@@ -713,7 +717,11 @@ export function InspectorPanel({
             <Flame className="w-4 h-4 text-orange-400 shrink-0" />
             <div className="min-w-0">
               <div className="font-semibold text-white">
-                {fire.targetType === 'house' ? 'House on Fire!' : 'Fire Burning!'}
+                {fire.targetType === 'house'
+                  ? 'House on Fire!'
+                  : fire.buildingId
+                  ? 'Building on Fire!'
+                  : 'Fire Burning!'}
               </div>
               <div className="text-[11px] text-orange-200">
                 {fire.fireTruckArrived
@@ -738,6 +746,31 @@ export function InspectorPanel({
                 {Math.max(0, Math.ceil(cityEvent.durationSeconds - cityEvent.elapsedSeconds))}s left
               </div>
             </div>
+          </div>
+        )}
+
+        {b.category !== 'road_path' && (
+          <div className="flex items-center gap-2 mb-2">
+            <button
+              type="button"
+              disabled={Boolean(robbery && robbery.status === 'active')}
+              onClick={() => onTriggerRobbery(tile.x, tile.y)}
+              className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-rose-950/70 hover:bg-rose-900/90 disabled:opacity-50 disabled:cursor-not-allowed text-rose-200 border border-rose-700/70 text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+              title="Call a robbery at this building"
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+              {robbery && robbery.status === 'active' ? 'Robbery Active' : 'Call Robbery'}
+            </button>
+            <button
+              type="button"
+              disabled={Boolean(fire && fire.status === 'active')}
+              onClick={() => onTriggerFire(tile.x, tile.y)}
+              className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-orange-950/70 hover:bg-orange-900/90 disabled:opacity-50 disabled:cursor-not-allowed text-orange-200 border border-orange-600/70 text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+              title="Start a fire at this building"
+            >
+              <Flame className="w-3.5 h-3.5 text-orange-400" />
+              {fire && fire.status === 'active' ? 'On Fire' : 'Start Fire'}
+            </button>
           </div>
         )}
 

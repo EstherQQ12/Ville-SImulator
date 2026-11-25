@@ -273,7 +273,18 @@ export function HudOverlay({
 
   if (isUiHidden) {
     return (
-      <div className="absolute top-[max(0.875rem,env(safe-area-inset-top))] right-[max(0.875rem,env(safe-area-inset-right))] z-30 transform-gpu pointer-events-none">
+      <div className="absolute top-[max(0.875rem,env(safe-area-inset-top))] right-[max(0.875rem,env(safe-area-inset-right))] z-30 transform-gpu pointer-events-none flex items-center gap-2">
+        {toolMode === 'camera' && (
+          <button
+            type="button"
+            onClick={() => onSelectTool('pan')}
+            title="Exit Photo Mode (Esc)"
+            className="pointer-events-auto flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold shadow-lg transition-colors whitespace-nowrap touch-manipulation"
+          >
+            <X className="w-4 h-4" />
+            Cancel Photo
+          </button>
+        )}
         <button
           type="button"
           onClick={onToggleHideUi}
