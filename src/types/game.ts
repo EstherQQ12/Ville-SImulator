@@ -258,6 +258,7 @@ export interface Person {
   pedestrianPathIndex?: number;
   rerouteCooldown?: number;
   waterActivity?: 'kayak' | 'rowing' | 'swim';
+  floodSheltering?: boolean;
   waterTileX?: number;
   waterTileY?: number;
   boatBuilt?: boolean;
@@ -266,6 +267,7 @@ export interface Person {
   targetAnimalId?: string;
   targetConstructionId?: string;
   hasBicycle?: boolean;
+  isChild?: boolean;
   holdTimer: number;
 }
 
@@ -676,6 +678,7 @@ export interface Car {
   returnStationId?: string;
   returnJailId?: string;
   destLabel?: string;
+  swerveOffset?: number;
 }
 
 export interface TrashItem {
@@ -856,6 +859,12 @@ export interface SavedMapData {
   }[];
   customBlueprints: BuildingBlueprint[];
   simState?: SavedSimState;
+}
+
+export interface TrashedMapEntry {
+  map: SavedMapData;
+  deletedAt: number;
+  isPreset?: boolean;
 }
 
 export interface SelectionTarget {

@@ -25,10 +25,13 @@ import {
   SimulationStats,
   TILE_SIZE,
   ToolMode,
+  TrashedMapEntry,
 } from './types/game';
 import { soundEngine } from './utils/sound';
 
 const SAVED_MAPS_STORAGE_KEY = 'cartoville_saved_maps_v1';
+const TRASHED_MAPS_STORAGE_KEY = 'villesim_trashed_maps_v1';
+const HIDDEN_PRESETS_STORAGE_KEY = 'villesim_hidden_presets_v1';
 const RUNTIME_MAPS_STORAGE_KEY = 'villesim_runtime_maps_v1';
 const LAST_ACTIVE_MAP_ID_KEY = 'villesim_last_map_id_v1';
 
@@ -74,18 +77,59 @@ function writeRuntimeMapToStorage(data: SavedMapData): Record<string, SavedMapDa
   return all;
 }
 
+function loadTrashedMapsFromStorage(): TrashedMapEntry[] {
+  try {
+    const raw = localStorage.getItem(TRASHED_MAPS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadHiddenPresetIdsFromStorage(): string[] {
+  try {
+    const raw = localStorage.getItem(HIDDEN_PRESETS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function removeRuntimeMapFromStorage(id: string) {
+  try {
+    const all = loadRuntimeMapsFromStorage();
+    if (all[id]) {
+      delete all[id];
+      localStorage.setItem(RUNTIME_MAPS_STORAGE_KEY, JSON.stringify(all));
+    }
+    if (localStorage.getItem(LAST_ACTIVE_MAP_ID_KEY) === id) {
+      localStorage.removeItem(LAST_ACTIVE_MAP_ID_KEY);
+    }
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
 export default function App() {
   const initialSavedMaps = loadSavedMapsFromStorage();
+  const initialTrashedMaps = loadTrashedMapsFromStorage();
+  const initialHiddenPresetIds = loadHiddenPresetIdsFromStorage();
   const initialRuntimeMaps = loadRuntimeMapsFromStorage();
   const simRef = useRef<CitySimulation | null>(null);
   if (!simRef.current) {
     const lastId = getLastActiveMapId();
+    const visiblePresets = PRESET_MAPS.filter((m) => !initialHiddenPresetIds.includes(m.id));
+    const fallbackMap = initialSavedMaps[0] || visiblePresets[0] || PRESET_MAPS[0];
     const initialMap =
       (lastId && initialRuntimeMaps[lastId]) ||
       (lastId && initialSavedMaps.find((m) => m.id === lastId)) ||
-      (lastId && PRESET_MAPS.find((m) => m.id === lastId)) ||
-      initialRuntimeMaps[PRESET_MAPS[0].id] ||
-      PRESET_MAPS[0];
+      (lastId && visiblePresets.find((m) => m.id === lastId)) ||
+      initialRuntimeMaps[fallbackMap.id] ||
+      fallbackMap;
     simRef.current = new CitySimulation(initialMap);
   }
 
@@ -111,6 +155,8 @@ export default function App() {
   const [gameState, setGameState] = useState<GameState>('TITLE_MENU');
   const [selectedPresetId, setSelectedPresetId] = useState<string>(simRef.current.mapId);
   const [savedMaps, setSavedMaps] = useState<SavedMapData[]>(initialSavedMaps);
+  const [trashedMaps, setTrashedMaps] = useState<TrashedMapEntry[]>(initialTrashedMaps);
+  const [hiddenPresetIds, setHiddenPresetIds] = useState<string[]>(initialHiddenPresetIds);
   const [mapName, setMapName] = useState<string>(simRef.current.mapName);
 
   const [isRunning, setIsRunning] = useState<boolean>(true);
@@ -920,16 +966,132 @@ export default function App() {
     }, 2000);
   };
 
-  const handleDeleteSavedMap = (id: string) => {
-    setSavedMaps((prev) => {
-      const next = prev.filter((m) => m.id !== id);
+  const handleMoveWorldToTrash = (mapToTrash: SavedMapData) => {
+    const isPreset = PRESET_MAPS.some((p) => p.id === mapToTrash.id);
+    const runtimeSnapshot =
+      simRef.current && simRef.current.mapId === mapToTrash.id
+        ? simRef.current.exportMapData(simRef.current.mapName)
+        : loadRuntimeMapsFromStorage()[mapToTrash.id] || mapToTrash;
+
+    if (isPreset) {
+      setHiddenPresetIds((prev) => {
+        if (prev.includes(mapToTrash.id)) return prev;
+        const next = [...prev, mapToTrash.id];
+        try {
+          localStorage.setItem(HIDDEN_PRESETS_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // Ignore storage quota errors
+        }
+        return next;
+      });
+    } else {
+      setSavedMaps((prev) => {
+        const next = prev.filter((m) => m.id !== mapToTrash.id);
+        try {
+          localStorage.setItem(SAVED_MAPS_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // Ignore storage quota errors
+        }
+        return next;
+      });
+    }
+
+    setTrashedMaps((prev) => {
+      const next = [
+        { map: runtimeSnapshot, deletedAt: Date.now(), isPreset },
+        ...prev.filter((item) => item.map.id !== mapToTrash.id),
+      ];
       try {
-        localStorage.setItem(SAVED_MAPS_STORAGE_KEY, JSON.stringify(next));
+        localStorage.setItem(TRASHED_MAPS_STORAGE_KEY, JSON.stringify(next));
       } catch {
         // Ignore storage quota errors
       }
       return next;
     });
+
+    if (selectedPresetId === mapToTrash.id) {
+      const remainingSaved = savedMaps.filter((m) => m.id !== mapToTrash.id);
+      const remainingPresets = PRESET_MAPS.filter(
+        (m) => m.id !== mapToTrash.id && !hiddenPresetIds.includes(m.id)
+      );
+      const nextFallback = remainingSaved[0] || remainingPresets[0] || createBiomePreset('valley');
+      handleLoadMap(nextFallback, true);
+    }
+    soundEngine.playBulldoze();
+  };
+
+  const handleDeleteSavedMap = (id: string) => {
+    const target = savedMaps.find((m) => m.id === id);
+    if (target) {
+      handleMoveWorldToTrash(target);
+    }
+  };
+
+  const handleRestoreTrashedMap = (id: string) => {
+    const entry = trashedMaps.find((t) => t.map.id === id);
+    if (!entry) return;
+
+    setTrashedMaps((prev) => {
+      const next = prev.filter((t) => t.map.id !== id);
+      try {
+        localStorage.setItem(TRASHED_MAPS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage quota errors
+      }
+      return next;
+    });
+
+    if (entry.isPreset) {
+      setHiddenPresetIds((prev) => {
+        const next = prev.filter((pid) => pid !== id);
+        try {
+          localStorage.setItem(HIDDEN_PRESETS_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // Ignore storage quota errors
+        }
+        return next;
+      });
+    } else {
+      setSavedMaps((prev) => {
+        const next = [entry.map, ...prev.filter((m) => m.id !== id)];
+        try {
+          localStorage.setItem(SAVED_MAPS_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // Ignore storage quota errors
+        }
+        return next;
+      });
+    }
+
+    writeRuntimeMapToStorage(entry.map);
+    soundEngine.playSaveIcon();
+  };
+
+  const handlePermanentDeleteTrashedMap = (id: string) => {
+    setTrashedMaps((prev) => {
+      const next = prev.filter((t) => t.map.id !== id);
+      try {
+        localStorage.setItem(TRASHED_MAPS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage quota errors
+      }
+      return next;
+    });
+    removeRuntimeMapFromStorage(id);
+    soundEngine.playBulldoze();
+  };
+
+  const handleEmptyTrash = () => {
+    for (const entry of trashedMaps) {
+      removeRuntimeMapFromStorage(entry.map.id);
+    }
+    setTrashedMaps([]);
+    try {
+      localStorage.setItem(TRASHED_MAPS_STORAGE_KEY, JSON.stringify([]));
+    } catch {
+      // Ignore storage quota errors
+    }
+    soundEngine.playBulldoze();
   };
 
   const handleStartGame = () => {
@@ -1067,8 +1229,14 @@ export default function App() {
         <TitleScreen
           selectedPresetId={selectedPresetId}
           savedMaps={savedMaps}
+          trashedMaps={trashedMaps}
+          hiddenPresetIds={hiddenPresetIds}
           onSelectMap={(map) => handleLoadMap(map, true)}
           onCreateBiomeMap={(tpl) => handleCreateBiomeMap(tpl, undefined, false)}
+          onDeleteWorld={handleMoveWorldToTrash}
+          onRestoreTrashedMap={handleRestoreTrashedMap}
+          onPermanentDeleteTrashedMap={handlePermanentDeleteTrashedMap}
+          onEmptyTrash={handleEmptyTrash}
           onStartGame={handleStartGame}
         />
       )}
@@ -1384,11 +1552,15 @@ export default function App() {
         isOpen={isMapManagerOpen}
         currentMapName={mapName}
         savedMaps={savedMaps}
+        trashedMaps={trashedMaps}
         onClose={() => setIsMapManagerOpen(false)}
         onSaveMap={handleSaveMap}
         onLoadMap={(map) => handleLoadMap(map, true)}
         onCreateBiomeMap={(tpl, name) => handleCreateBiomeMap(tpl, name, true)}
         onDeleteSavedMap={handleDeleteSavedMap}
+        onRestoreTrashedMap={handleRestoreTrashedMap}
+        onPermanentDeleteTrashedMap={handlePermanentDeleteTrashedMap}
+        onEmptyTrash={handleEmptyTrash}
       />
 
       {/* Daily Photojournalism Newspaper Modal */}

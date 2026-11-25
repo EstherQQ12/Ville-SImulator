@@ -271,6 +271,11 @@ export class CitySimulation {
   private basementSpreadAccumulator = 0;
   private tornadoVx = 28;
   private tornadoVy = 18;
+  private tornadoCasualtyCount = 0;
+  private tornadoBasementLabelCooldown = 0;
+  private floodDrownAccumulator = 0;
+  private floodDrownCount = 0;
+  private floodNewsLogged = false;
   private lastSchoolBellKey = '';
   private lastFestivalDay = -3;
   private lastCeremonyDay = -3;
@@ -408,6 +413,11 @@ export class CitySimulation {
     this.lastExpansionMilestone = 0;
     this.hasNukeOccurred = false;
     this.earthquakeShakeIntensity = 0;
+    this.tornadoCasualtyCount = 0;
+    this.tornadoBasementLabelCooldown = 0;
+    this.floodDrownAccumulator = 0;
+    this.floodDrownCount = 0;
+    this.floodNewsLogged = false;
     this.lastSchoolBellKey = '';
     this.crises = {
       virusActive: false,
@@ -609,6 +619,7 @@ export class CitySimulation {
     }
 
     this.rebuildCaches();
+    this.deduplicateExistingBuildingNames();
     // Seed initial traffic & roaming farm/wild animals
     this.seedInitialTraffic(14);
     this.seedInitialAnimals();
@@ -1320,6 +1331,58 @@ export class CitySimulation {
     return this.buildingsList.some((b) => b.category === 'city_hall');
   }
 
+  private generateUniquePlotName(rawBaseName: string, excludeId?: string, includePending = false): string {
+    const trimmed = (rawBaseName || 'Plot').trim();
+    const baseName = trimmed.replace(/\s+#?\d+$/, '').trim() || trimmed;
+    if (baseName.toLowerCase() === 'city hall' && !this.hasCityHall()) {
+      return 'City Hall';
+    }
+    const usedNames = new Set<string>();
+    for (const b of this.buildingsList) {
+      if (excludeId && b.id === excludeId) continue;
+      usedNames.add(b.name.trim().toLowerCase());
+    }
+    for (const c of this.activeConstructions) {
+      usedNames.add(c.blueprintName.trim().toLowerCase());
+    }
+    if (includePending) {
+      for (const pr of this.pendingProposals) {
+        usedNames.add(pr.blueprintName.trim().toLowerCase());
+      }
+    }
+    let idx = 1;
+    while (usedNames.has(`${baseName} ${idx}`.toLowerCase())) {
+      idx++;
+    }
+    return `${baseName} ${idx}`;
+  }
+
+  private deduplicateExistingBuildingNames() {
+    const counts = new Map<string, number>();
+    for (const b of this.buildingsList) {
+      const key = b.name.trim().toLowerCase();
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    const hasDuplicates = Array.from(counts.values()).some((c) => c > 1);
+    if (!hasDuplicates) return;
+
+    const usedNames = new Set<string>();
+    for (const b of this.buildingsList) {
+      const key = b.name.trim().toLowerCase();
+      if ((counts.get(key) || 0) <= 1 && !usedNames.has(key)) {
+        usedNames.add(key);
+        continue;
+      }
+      const base = b.name.replace(/\s+#?\d+$/, '').trim() || b.name.trim() || 'Plot';
+      let n = 1;
+      while (usedNames.has(`${base} ${n}`.toLowerCase())) {
+        n++;
+      }
+      b.name = `${base} ${n}`;
+      usedNames.add(b.name.toLowerCase());
+    }
+  }
+
   public placeBuilding(x: number, y: number, blueprint: BuildingBlueprint): PlacedBuilding | null {
     const tile = this.getTile(x, y);
     if (!tile || tile.terrain === 'void') return null;
@@ -1346,10 +1409,11 @@ export class CitySimulation {
         };
       }
     }
+    const uniqueName = this.generateUniquePlotName(blueprint.name);
     const bld: PlacedBuilding = {
       id: `bld_${this.buildingIdCounter++}_${Date.now().toString(36)}`,
       blueprintId: blueprint.id,
-      name: blueprint.name,
+      name: uniqueName,
       category: blueprint.category,
       iconGrid: [...blueprint.iconGrid],
       accentColor: blueprint.accentColor,
@@ -2495,6 +2559,51 @@ export class CitySimulation {
           blockedByVehicle = false;
         }
 
+        // 1.25 Yield or swerve safely around cows, pigs & chickens on roads (never kill animals!)
+        let targetSwerve = 0;
+        for (const ani of this.animals) {
+          if (ani.kind === 'bird') continue;
+          const arx = ani.wx - car.wx;
+          const ary = ani.wy - car.wy;
+          const aprojFwd = arx * fwdX + ary * fwdY;
+          if (aprojFwd < -4 || aprojFwd > 48) continue;
+          const aprojSide = -arx * fwdY + ary * fwdX; // +right, -left
+          if (Math.abs(aprojSide) > 13.5) continue;
+
+          const aniTile = this.getTile(
+            Math.floor(ani.wx / TILE_SIZE),
+            Math.floor(ani.wy / TILE_SIZE)
+          );
+          if (!aniTile?.hasRoad && Math.abs(aprojSide) > 9) continue;
+
+          // Swerve toward opposite side of the lane if road space allows, otherwise wait for animal to cross
+          const swerveDir = aprojSide >= 0 ? -7.5 : 7.5;
+          const swerveCheckX = car.wx + (-fwdY * swerveDir);
+          const swerveCheckY = car.wy + (fwdX * swerveDir);
+          const swerveTile = this.getTile(
+            Math.floor(swerveCheckX / TILE_SIZE),
+            Math.floor(swerveCheckY / TILE_SIZE)
+          );
+          const canSwerveSafely =
+            Boolean(swerveTile?.hasRoad) &&
+            Math.abs(aprojSide - swerveDir) >= 7.2 &&
+            Math.abs(aprojSide) >= 2.2;
+
+          if (aprojFwd < 18 && (!canSwerveSafely || Math.abs(aprojSide) < 4.8)) {
+            desiredMaxSpeed = 0;
+            blockedByVehicle = true;
+            blockedByHazard = true;
+            break;
+          } else if (canSwerveSafely) {
+            targetSwerve = swerveDir;
+            desiredMaxSpeed = Math.min(desiredMaxSpeed, car.maxSpeed * 0.62);
+          } else {
+            desiredMaxSpeed = Math.min(desiredMaxSpeed, aprojFwd < 26 ? 10 : car.maxSpeed * 0.4);
+          }
+        }
+        const prevSwerve = car.swerveOffset ?? 0;
+        car.swerveOffset = prevSwerve + (targetSwerve - prevSwerve) * Math.min(1, stepDt * 8.5);
+
         // 1.5 Check active Car Crash obstruction ahead on the road
         if (
           !car.targetCrashId &&
@@ -3217,6 +3326,33 @@ export class CitySimulation {
       const p = this.people[i];
 
       if (p.role === 'pedestrian') {
+        if (p.floodSheltering) {
+          p.speed = Math.max(p.speed, 46);
+          const res = this.stepPersonAlongPath(p, realDt, 11);
+          if (res === 'arrived') {
+            if (p.destBuildingId) {
+              const shelter = this.buildingsList.find((b) => b.id === p.destBuildingId);
+              if (shelter) {
+                this.incrementBuildingOccupancy(shelter, 1);
+                if (Math.random() < 0.45) {
+                  this.floatingLabels.push({
+                    wx: (shelter.x + 0.5) * TILE_SIZE,
+                    wy: (shelter.y + 0.3) * TILE_SIZE,
+                    text: 'Sheltered Up High!',
+                    color: '#E0F2FE',
+                    bgColor: '#0284C7',
+                    age: 0,
+                    maxAge: 1.7,
+                  });
+                }
+              }
+            }
+            this.people.splice(i, 1);
+          } else if (res === 'blocked') {
+            this.people.splice(i, 1);
+          }
+          continue;
+        }
         if ((curfew || isWarPanic) && p.state !== 'returning') {
           p.isPanicking = isWarPanic;
           p.speed = isWarPanic ? 48 : Math.max(p.speed, 38);
@@ -3586,7 +3722,10 @@ export class CitySimulation {
     finalWy?: number
   ): boolean {
     const allowFrozen = this.canPersonSkateOnFrozenWater(p);
-    const allowAll = p.role === 'invader' || (p.role === 'soldier' && this.crises.warActive);
+    const allowAll =
+      p.role === 'invader' ||
+      (p.role === 'soldier' && this.crises.warActive) ||
+      Boolean(p.floodSheltering);
     const startPt = this.getCurrentWalkableStart(p.wx, p.wy, allowFrozen, allowAll);
     if (!startPt) return false;
     const path = this.findPedestrianPath(
@@ -3636,7 +3775,10 @@ export class CitySimulation {
       p.rerouteCooldown = Math.max(0, p.rerouteCooldown - realDt);
     }
     const allowFrozen = this.canPersonSkateOnFrozenWater(p);
-    const allowAll = p.role === 'invader' || (p.role === 'soldier' && this.crises.warActive);
+    const allowAll =
+      p.role === 'invader' ||
+      (p.role === 'soldier' && this.crises.warActive) ||
+      Boolean(p.floodSheltering);
     // If person is stranded on a newly paved unmarked road or water tile, step back to adjacent walkable tile
     const curTx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(p.wx / TILE_SIZE)));
     const curTy = Math.max(0, Math.min(this.gridRows - 1, Math.floor(p.wy / TILE_SIZE)));
@@ -4708,16 +4850,26 @@ export class CitySimulation {
     }
 
     const partnerId = partnerTarget && partnerOrigin && partnerPath ? `ppl_${this.personIdCounter++}` : undefined;
+    const isKidHobby =
+      hobbyKind === 'kite' ||
+      hobbyKind === 'skateboarding' ||
+      hobbyKind === 'snowball_fight' ||
+      hobbyKind === 'snowman' ||
+      hobbyKind === 'bird_feeding' ||
+      hobbyKind === 'ice_skating';
+    const primaryIsChild = isKidHobby && Math.random() < 0.6;
+    const partnerIsChild = hobbyKind === 'snowball_fight' && (primaryIsChild || Math.random() < 0.6);
 
     this.people.push({
       id: primaryId,
       role: 'hobbyist',
       hobbyKind,
+      isChild: primaryIsChild,
       wx: (originBuilding.x + 0.5) * TILE_SIZE,
       wy: (originBuilding.y + 0.78) * TILE_SIZE,
       targetWx: (target.x + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 10,
       targetWy: (target.y + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 8,
-      speed: hobbyKind === 'ice_skating' ? 32 : 26,
+      speed: hobbyKind === 'ice_skating' ? 32 : primaryIsChild ? 28 : 26,
       shirtColor: shirtPalette[Math.floor(Math.random() * shirtPalette.length)],
       animPhase: Math.random() * Math.PI * 2,
       state: 'walking',
@@ -4735,11 +4887,12 @@ export class CitySimulation {
         id: partnerId,
         role: 'hobbyist',
         hobbyKind: 'snowball_fight',
+        isChild: partnerIsChild,
         wx: (partnerOrigin.x + 0.5) * TILE_SIZE,
         wy: (partnerOrigin.y + 0.78) * TILE_SIZE,
         targetWx: (partnerTarget.x + 0.5) * TILE_SIZE,
         targetWy: (partnerTarget.y + 0.5) * TILE_SIZE,
-        speed: 26,
+        speed: partnerIsChild ? 28 : 26,
         shirtColor: shirtPalette[(Math.floor(Math.random() * shirtPalette.length) + 1) % shirtPalette.length],
         animPhase: Math.random() * Math.PI * 2,
         state: 'walking',
@@ -4803,13 +4956,15 @@ export class CitySimulation {
         if (path) {
           const shirts = ['#EC4899', '#0EA5E9', '#10B981', '#F59E0B', '#8B5CF6', '#FB7185'];
           home.totalVisits = Math.max(0, home.totalVisits - 1);
+          const shopTargetX = (shop.x + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 8;
+          const shopTargetY = (shop.y + 0.8) * TILE_SIZE;
           this.people.push({
             id: `ppl_${this.personIdCounter++}`,
             role: 'shopper',
             wx: (home.x + 0.5) * TILE_SIZE,
             wy: (home.y + 0.78) * TILE_SIZE,
-            targetWx: (shop.x + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 8,
-            targetWy: (shop.y + 0.8) * TILE_SIZE,
+            targetWx: shopTargetX,
+            targetWy: shopTargetY,
             speed: 30,
             shirtColor: shirts[Math.floor(Math.random() * shirts.length)],
             animPhase: Math.random() * Math.PI * 2,
@@ -4818,10 +4973,35 @@ export class CitySimulation {
             destBuildingId: shop.id,
             targetTileX: shop.x,
             targetTileY: shop.y,
-            pedestrianPath: path,
+            pedestrianPath: [...path],
             pedestrianPathIndex: path.length > 1 ? 1 : 0,
             holdTimer: 0,
           });
+          // Often a shorter child tags along beside an adult shopper
+          if (Math.random() < 0.36) {
+            const kidShirts = ['#FACC15', '#38BDF8', '#FB7185', '#4ADE80', '#A78BFA'];
+            this.people.push({
+              id: `ppl_${this.personIdCounter++}`,
+              role: 'pedestrian',
+              isChild: true,
+              wx: (home.x + 0.5) * TILE_SIZE - 4,
+              wy: (home.y + 0.82) * TILE_SIZE,
+              targetWx: shopTargetX - 4,
+              targetWy: shopTargetY + 1,
+              speed: 30,
+              shirtColor: kidShirts[Math.floor(Math.random() * kidShirts.length)],
+              hatColor: Math.random() < 0.4 ? '#FDE047' : undefined,
+              animPhase: Math.random() * Math.PI * 2,
+              state: 'walking',
+              homeBuildingId: home.id,
+              destBuildingId: shop.id,
+              targetTileX: shop.x,
+              targetTileY: shop.y,
+              pedestrianPath: [...path],
+              pedestrianPathIndex: path.length > 1 ? 1 : 0,
+              holdTimer: 0,
+            });
+          }
           return;
         }
       }
@@ -4834,6 +5014,7 @@ export class CitySimulation {
 
     const shuffled = [...buildings].sort(() => Math.random() - 0.5);
     const pedShirts = ['#0EA5E9', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6', '#F97316'];
+    const kidShirts = ['#FACC15', '#38BDF8', '#FB7185', '#4ADE80', '#A78BFA', '#FB923C'];
 
     for (const origin of shuffled.slice(0, 6)) {
       const destPool = buildings
@@ -4845,25 +5026,54 @@ export class CitySimulation {
         const path = this.findPedestrianPath(this.tiles, { x: origin.x, y: origin.y }, { x: dest.x, y: dest.y });
         if (path && path.length >= 2) {
           origin.totalVisits = Math.max(0, origin.totalVisits - 1);
+          const spawnAsChild = Math.random() < 0.32;
           this.people.push({
             id: `ppl_${this.personIdCounter++}`,
             role: 'pedestrian',
+            isChild: spawnAsChild,
             wx: (origin.x + 0.5) * TILE_SIZE,
             wy: (origin.y + 0.78) * TILE_SIZE,
             targetWx: (dest.x + 0.5) * TILE_SIZE,
             targetWy: (dest.y + 0.78) * TILE_SIZE,
-            speed: 25,
-            shirtColor: pedShirts[Math.floor(Math.random() * pedShirts.length)],
+            speed: spawnAsChild ? 28 : 25,
+            shirtColor: spawnAsChild
+              ? kidShirts[Math.floor(Math.random() * kidShirts.length)]
+              : pedShirts[Math.floor(Math.random() * pedShirts.length)],
+            hatColor: spawnAsChild && Math.random() < 0.35 ? '#FACC15' : undefined,
             animPhase: Math.random() * Math.PI * 2,
             state: 'walking',
             homeBuildingId: origin.id,
             destBuildingId: dest.id,
             targetTileX: dest.x,
             targetTileY: dest.y,
-            pedestrianPath: path,
+            pedestrianPath: [...path],
             pedestrianPathIndex: 1,
             holdTimer: 0,
           });
+          // Sometimes an adult leaving a house or park walks with a shorter kid beside them
+          if (!spawnAsChild && (origin.category === 'residential' || dest.category === 'park') && Math.random() < 0.34) {
+            this.people.push({
+              id: `ppl_${this.personIdCounter++}`,
+              role: 'pedestrian',
+              isChild: true,
+              wx: (origin.x + 0.5) * TILE_SIZE - 4,
+              wy: (origin.y + 0.8) * TILE_SIZE,
+              targetWx: (dest.x + 0.5) * TILE_SIZE - 4,
+              targetWy: (dest.y + 0.8) * TILE_SIZE,
+              speed: 25,
+              shirtColor: kidShirts[Math.floor(Math.random() * kidShirts.length)],
+              hatColor: Math.random() < 0.35 ? '#38BDF8' : undefined,
+              animPhase: Math.random() * Math.PI * 2,
+              state: 'walking',
+              homeBuildingId: origin.id,
+              destBuildingId: dest.id,
+              targetTileX: dest.x,
+              targetTileY: dest.y,
+              pedestrianPath: [...path],
+              pedestrianPathIndex: 1,
+              holdTimer: 0,
+            });
+          }
           return;
         }
       }
@@ -6104,19 +6314,124 @@ export class CitySimulation {
     }
   }
 
+  public isTallShelterBuilding(b: PlacedBuilding): boolean {
+    return (
+      b.category === 'workplace' ||
+      b.category === 'hospital' ||
+      b.category === 'school' ||
+      b.category === 'city_hall' ||
+      b.category === 'factory' ||
+      (b.category === 'landmark' && b.capacity >= 20)
+    );
+  }
+
+  private findNearestTallShelter(wx: number, wy: number): PlacedBuilding | null {
+    const shelters = this.buildingsList.filter((b) => this.isTallShelterBuilding(b));
+    if (shelters.length === 0) return null;
+    let best = shelters[0];
+    let bestDist = Infinity;
+    for (const s of shelters) {
+      const d = Math.hypot((s.x + 0.5) * TILE_SIZE - wx, (s.y + 0.5) * TILE_SIZE - wy);
+      if (d < bestDist) {
+        bestDist = d;
+        best = s;
+      }
+    }
+    return best;
+  }
+
+  private splitTileIntoEarthquakeWater(tile: MapTile): boolean {
+    if (tile.terrain === 'void' || tile.terrain === 'water') return false;
+    if (tile.building?.category === 'city_hall') return false;
+    if (tile.building?.hasBasement) {
+      this.floatingLabels.push({
+        wx: (tile.x + 0.5) * TILE_SIZE,
+        wy: (tile.y + 0.35) * TILE_SIZE,
+        text: 'Saved in Basement!',
+        color: '#ECFDF5',
+        bgColor: '#047857',
+        age: 0,
+        maxAge: 2.2,
+      });
+      return false;
+    }
+
+    if (tile.building) {
+      const bld = tile.building;
+      this.floatingLabels.push({
+        wx: (tile.x + 0.5) * TILE_SIZE,
+        wy: (tile.y + 0.35) * TILE_SIZE,
+        text: 'Split in Rift!',
+        color: '#FEF2F2',
+        bgColor: '#92400E',
+        age: 0,
+        maxAge: 2.2,
+      });
+      if (bld.category === 'residential' || bld.totalVisits > 0) {
+        this.spawnDeathEvent(bld, false);
+      }
+      for (let d = 0; d < 6; d++) {
+        this.woodChips.push({
+          wx: (tile.x + 0.5) * TILE_SIZE,
+          wy: (tile.y + 0.5) * TILE_SIZE,
+          vx: (Math.random() - 0.5) * 44,
+          vy: -18 - Math.random() * 18,
+          age: 0,
+          maxAge: 0.65,
+          color: d % 2 === 0 ? '#78350F' : '#64748B',
+        });
+      }
+      tile.building = null;
+    }
+
+    tile.hasRoad = false;
+    tile.hasZebraCrossing = false;
+    tile.hasFootbridge = false;
+    tile.isBridgeBroken = false;
+    tile.isFlooded = false;
+    this.removeStallOnTile(tile.x, tile.y);
+    this.clearPermitsAtTile(tile.x, tile.y);
+    this.resolveBrokenBridgeAt(tile.x, tile.y);
+
+    this.cars = this.cars.filter((c) => {
+      const cx = Math.floor(c.wx / TILE_SIZE);
+      const cy = Math.floor(c.wy / TILE_SIZE);
+      return !(cx === tile.x && cy === tile.y);
+    });
+    for (let i = this.crashes.length - 1; i >= 0; i--) {
+      if (this.crashes[i].x === tile.x && this.crashes[i].y === tile.y) {
+        this.releaseCrashCars(this.crashes[i].id);
+        this.crashes.splice(i, 1);
+      }
+    }
+
+    tile.terrain = 'water';
+
+    // Relocate any land animals on the newly split water tile to nearest dry land
+    for (const ani of this.animals) {
+      if (ani.kind === 'bird') continue;
+      if (Math.floor(ani.wx / TILE_SIZE) === tile.x && Math.floor(ani.wy / TILE_SIZE) === tile.y) {
+        this.rescueLandAnimalFromWater(ani);
+      }
+    }
+    return true;
+  }
+
   public triggerDisaster(type: 'tornado' | 'earthquake' | 'flood', playAudio = true): boolean {
     if (this.chaosCooldowns[type] > 0) return false;
     this.chaosCooldowns[type] = this.CHAOS_COOLDOWN_SECONDS;
 
     if (type === 'tornado') {
-      const rx = 3 + Math.floor(Math.random() * (this.gridCols - 6));
-      const ry = 3 + Math.floor(Math.random() * (this.gridRows - 6));
+      const rx = 3 + Math.floor(Math.random() * Math.max(1, this.gridCols - 6));
+      const ry = 3 + Math.floor(Math.random() * Math.max(1, this.gridRows - 6));
       this.crises.tornadoActive = true;
       this.crises.tornadoRemaining = 26;
       this.crises.tornadoWx = (rx + 0.5) * TILE_SIZE;
       this.crises.tornadoWy = (ry + 0.5) * TILE_SIZE;
-      this.tornadoVx = (Math.random() < 0.5 ? -1 : 1) * (24 + Math.random() * 16);
-      this.tornadoVy = (Math.random() < 0.5 ? -1 : 1) * (16 + Math.random() * 14);
+      this.tornadoVx = (Math.random() < 0.5 ? -1 : 1) * (28 + Math.random() * 16);
+      this.tornadoVy = (Math.random() < 0.5 ? -1 : 1) * (20 + Math.random() * 14);
+      this.tornadoCasualtyCount = 0;
+      this.tornadoBasementLabelCooldown = 0;
       this.floatingLabels.push({
         wx: this.crises.tornadoWx,
         wy: this.crises.tornadoWy - 14,
@@ -6126,17 +6441,74 @@ export class CitySimulation {
         age: 0,
         maxAge: 2.5,
       });
-      this.logDailyNews('TWISTER ALERT: A swirling tornado touched down across town and sent picnic chairs flying!');
+      this.logDailyNews('TWISTER ALERT: A destructive tornado touched down, tearing through buildings, trees, and roads in its path!');
     } else if (type === 'earthquake') {
       this.crises.earthquakeActive = true;
       this.crises.earthquakeRemaining = 14;
       this.earthquakeShakeIntensity = 1.0;
-      // Crack 1-2 bridges & drop 1-2 road craters immediately
+
+      // Split land apart with a continuous jagged water fault rift across town!
+      const landCandidates = this.tiles.filter(
+        (t) =>
+          t.terrain !== 'water' &&
+          t.terrain !== 'void' &&
+          t.building?.category !== 'city_hall' &&
+          !t.building?.hasBasement &&
+          t.x >= 2 &&
+          t.x <= this.gridCols - 3 &&
+          t.y >= 2 &&
+          t.y <= this.gridRows - 3
+      );
+      let splitCount = 0;
+      let riftOrigin =
+        landCandidates.length > 0
+          ? landCandidates[Math.floor(Math.random() * landCandidates.length)]
+          : null;
+
+      if (riftOrigin) {
+        const horiz = Math.random() < 0.55;
+        const primaryDx = horiz ? (riftOrigin.x < this.gridCols / 2 ? 1 : -1) : 0;
+        const primaryDy = horiz ? 0 : riftOrigin.y < this.gridRows / 2 ? 1 : -1;
+        let cx = riftOrigin.x;
+        let cy = riftOrigin.y;
+        const riftSteps = 9 + Math.floor(Math.random() * 4);
+
+        for (let step = 0; step < riftSteps; step++) {
+          const cur = this.getTile(cx, cy);
+          if (cur && cur.terrain !== 'void') {
+            if (cur.terrain !== 'water') {
+              if (this.splitTileIntoEarthquakeWater(cur)) {
+                splitCount++;
+              }
+            }
+          }
+          // Step primarily along the fault axis with natural jagged lateral zig-zags
+          const zig = Math.random() < 0.42 ? (Math.random() < 0.5 ? -1 : 1) : 0;
+          let nx = cx + primaryDx + (horiz ? 0 : zig);
+          let ny = cy + primaryDy + (horiz ? zig : 0);
+          nx = Math.max(1, Math.min(this.gridCols - 2, nx));
+          ny = Math.max(1, Math.min(this.gridRows - 2, ny));
+
+          // Route around City Hall / basement-protected tile so fault shifts cleanly
+          const probe = this.getTile(nx, ny);
+          if (probe && (probe.building?.category === 'city_hall' || probe.building?.hasBasement)) {
+            if (probe.building?.hasBasement) {
+              this.splitTileIntoEarthquakeWater(probe);
+            }
+            nx = Math.max(1, Math.min(this.gridCols - 2, cx + (horiz ? primaryDx : 1)));
+            ny = Math.max(1, Math.min(this.gridRows - 2, cy + (horiz ? 1 : primaryDy)));
+          }
+          cx = nx;
+          cy = ny;
+        }
+        this.rebuildCaches();
+      }
+
+      // Crack 1-2 bridges & drop up to 3 road craters along tremors
       const waterRoads = this.tiles.filter(
         (t) => t.terrain === 'water' && (t.hasRoad || t.hasFootbridge) && !t.isBridgeBroken
       );
-      if (waterRoads.length > 0) {
-        const pick = waterRoads[Math.floor(Math.random() * waterRoads.length)];
+      for (const pick of waterRoads.sort(() => Math.random() - 0.5).slice(0, 2)) {
         pick.isBridgeBroken = true;
         this.brokenBridges.push({
           id: `br_${this.brokenBridgeIdCounter++}`,
@@ -6153,9 +6525,11 @@ export class CitySimulation {
           statusTimer: 0,
         });
       }
-      const roadTiles = this.tiles.filter((t) => t.hasRoad && t.terrain !== 'water');
-      if (roadTiles.length > 0 && this.blastCraters.length < 18) {
-        const spot = roadTiles[Math.floor(Math.random() * roadTiles.length)];
+      const roadTiles = this.tiles
+        .filter((t) => t.hasRoad && t.terrain !== 'water')
+        .sort(() => Math.random() - 0.5);
+      for (const spot of roadTiles.slice(0, 3)) {
+        if (this.blastCraters.length >= 64) break;
         if (!this.blastCraters.some((c) => c.x === spot.x && c.y === spot.y)) {
           this.blastCraters.push({
             id: `crater_${this.craterIdCounter++}`,
@@ -6163,69 +6537,130 @@ export class CitySimulation {
             y: spot.y,
             wx: (spot.x + 0.5) * TILE_SIZE,
             wy: (spot.y + 0.5) * TILE_SIZE,
-            radius: 9,
+            radius: 10,
             age: 0,
           });
         }
       }
+
       this.floatingLabels.push({
-        wx: (this.gridCols * TILE_SIZE) * 0.5,
-        wy: (this.gridRows * TILE_SIZE) * 0.4,
-        text: 'EARTHQUAKE!',
+        wx: ((riftOrigin?.x ?? this.gridCols / 2) + 0.5) * TILE_SIZE,
+        wy: ((riftOrigin?.y ?? this.gridRows / 2) + 0.4) * TILE_SIZE,
+        text: splitCount > 0 ? 'EARTHQUAKE RIFT!' : 'EARTHQUAKE!',
         color: '#FEF2F2',
         bgColor: '#92400E',
         age: 0,
-        maxAge: 2.5,
+        maxAge: 2.8,
       });
-      this.logDailyNews('EARTHQUAKE! Dishes rattled across town while repair crews raced to cracked bridges.');
+      this.logDailyNews(
+        splitCount > 0
+          ? `EARTHQUAKE RIFT: The ground split apart across ${splitCount} tiles, opening a water chasm through town!`
+          : 'EARTHQUAKE! Tremors cracked bridges and buckled streets across town.'
+      );
     } else if (type === 'flood') {
       this.crises.floodActive = true;
-      this.crises.floodRemaining = 32;
-      for (const t of this.tiles) t.isFlooded = false;
+      this.crises.floodRemaining = 36;
+      this.floodDrownAccumulator = 0;
+      this.floodDrownCount = 0;
+      this.floodNewsLogged = false;
 
-      // Flood low-lying shore tiles bordering water first
-      const candidates: MapTile[] = [];
-      const dirs = [
-        { dx: 1, dy: 0 },
-        { dx: -1, dy: 0 },
-        { dx: 0, dy: 1 },
-        { dx: 0, dy: -1 },
-      ];
+      // Submerge the ENTIRE city (all non-void, non-water tiles)
       for (const t of this.tiles) {
-        if (t.terrain === 'water') continue;
-        if (t.building?.category === 'city_hall') continue;
-        const nearWater = dirs.some((d) => this.getTile(t.x + d.dx, t.y + d.dy)?.terrain === 'water');
-        if (nearWater) candidates.push(t);
+        if (t.terrain !== 'void' && t.terrain !== 'water') {
+          t.isFlooded = true;
+        }
       }
-      const pool =
-        candidates.length > 0
-          ? candidates
-          : this.tiles.filter((t) => t.terrain !== 'water' && t.building?.category !== 'city_hall');
-      const shuffled = [...pool].sort(() => Math.random() - 0.5);
-      for (const t of shuffled.slice(0, 26)) {
-        t.isFlooded = true;
-      }
-      // Expand flood 1 tile further inland from half the flooded coastal tiles
-      const firstRing = this.tiles.filter((t) => t.isFlooded);
-      for (const ft of firstRing.slice(0, 12)) {
-        for (const d of dirs) {
-          const nt = this.getTile(ft.x + d.dx, ft.y + d.dy);
-          if (nt && nt.terrain !== 'water' && nt.building?.category !== 'city_hall' && Math.random() < 0.55) {
-            nt.isFlooded = true;
+
+      // Send outdoor citizens rushing to the nearest tall shelter building
+      const tallShelters = this.buildingsList.filter((b) => this.isTallShelterBuilding(b));
+      if (tallShelters.length > 0) {
+        const shelteredRoles = new Set<Person['role']>([
+          'pedestrian',
+          'shopper',
+          'hobbyist',
+          'fisher',
+          'woodcutter',
+          'planter',
+          'farmer',
+          'butcher',
+          'beggar',
+          'vendor',
+          'student',
+          'parent',
+          'builder',
+        ]);
+        for (const p of this.people) {
+          if (!shelteredRoles.has(p.role) || p.floodSheltering) continue;
+          const shelter = this.findNearestTallShelter(p.wx, p.wy);
+          if (!shelter) continue;
+          p.role = 'pedestrian';
+          p.floodSheltering = true;
+          p.state = 'walking';
+          p.speed = 46 + Math.random() * 10;
+          p.destBuildingId = shelter.id;
+          p.pedestrianPath = undefined;
+          this.assignPedestrianRoute(
+            p,
+            shelter.x,
+            shelter.y,
+            (shelter.x + 0.5) * TILE_SIZE,
+            (shelter.y + 0.72) * TILE_SIZE
+          );
+        }
+
+        // Also spawn several fleeing residents from flooded low buildings heading to tall buildings
+        const lowHouses = this.buildingsList
+          .filter((b) => !this.isTallShelterBuilding(b) && b.category !== 'park' && b.category !== 'crops')
+          .sort(() => Math.random() - 0.5)
+          .slice(0, 6);
+        for (const low of lowHouses) {
+          const shelter = this.findNearestTallShelter(
+            (low.x + 0.5) * TILE_SIZE,
+            (low.y + 0.5) * TILE_SIZE
+          );
+          if (!shelter) continue;
+          const fleePerson: Person = {
+            id: `ppl_${this.personIdCounter++}`,
+            role: 'pedestrian',
+            wx: (low.x + 0.5) * TILE_SIZE,
+            wy: (low.y + 0.76) * TILE_SIZE,
+            targetWx: (shelter.x + 0.5) * TILE_SIZE,
+            targetWy: (shelter.y + 0.72) * TILE_SIZE,
+            speed: 48 + Math.random() * 10,
+            shirtColor: '#38BDF8',
+            animPhase: Math.random() * Math.PI * 2,
+            state: 'walking',
+            homeBuildingId: low.id,
+            destBuildingId: shelter.id,
+            targetTileX: shelter.x,
+            targetTileY: shelter.y,
+            holdTimer: 18,
+            floodSheltering: true,
+          };
+          if (
+            this.assignPedestrianRoute(
+              fleePerson,
+              shelter.x,
+              shelter.y,
+              fleePerson.targetWx,
+              fleePerson.targetWy
+            )
+          ) {
+            this.people.push(fleePerson);
           }
         }
       }
-      const centerFlood = this.tiles.find((t) => t.isFlooded);
+
       this.floatingLabels.push({
-        wx: ((centerFlood?.x ?? this.gridCols / 2) + 0.5) * TILE_SIZE,
-        wy: ((centerFlood?.y ?? this.gridRows / 2) + 0.4) * TILE_SIZE,
-        text: 'FLASH FLOOD!',
+        wx: (this.gridCols * TILE_SIZE) * 0.5,
+        wy: (this.gridRows * TILE_SIZE) * 0.42,
+        text: 'CITYWIDE FLOOD!',
         color: '#E0F2FE',
         bgColor: '#0369A1',
         age: 0,
-        maxAge: 2.5,
+        maxAge: 2.8,
       });
-      this.logDailyNews('FLASH FLOOD: Rising water covered streets and parks—cars are splashing slowly through flood zones!');
+      this.logDailyNews('CITYWIDE FLOOD: Deep floodwaters submerged the entire city—citizens are climbing tall buildings to stay above water!');
     }
 
     if (playAudio) soundEngine.playDisasterRumble();
@@ -6523,29 +6958,52 @@ export class CitySimulation {
     }
     this.reduceMarketProduceForPollution();
 
-    // Destroy un-sheltered houses & leave road-blocking craters; buildings with underground basements survive!
+    // Destroy un-sheltered buildings, permits & leave deep blast craters; buildings with underground basements survive!
     const destroyedBuildingIds = new Set<string>();
     const casualtyBuildings: PlacedBuilding[] = [];
 
     for (let dy = -2; dy <= 2; dy++) {
       for (let dx = -2; dx <= 2; dx++) {
         const distSq = dx * dx + dy * dy;
-        if (distSq > 5) continue;
+        if (distSq > 6) continue;
         const t = this.getTile(tx + dx, ty + dy);
-        if (!t || t.terrain === 'water') continue;
+        if (!t || t.terrain === 'void') continue;
+        this.clearPermitsAtTile(t.x, t.y);
+
+        if (t.terrain === 'water') {
+          if ((t.hasRoad || t.hasFootbridge) && !t.isBridgeBroken) {
+            t.isBridgeBroken = true;
+            this.brokenBridges.push({
+              id: `br_${this.brokenBridgeIdCounter++}`,
+              x: t.x,
+              y: t.y,
+              wx: (t.x + 0.5) * TILE_SIZE,
+              wy: (t.y + 0.5) * TILE_SIZE,
+              kind: t.hasRoad ? 'road' : 'footbridge',
+              elapsedSeconds: 0,
+              maxRepairSeconds: 34,
+              repairerDispatched: false,
+              repairerArrived: false,
+              status: 'broken',
+              statusTimer: 0,
+            });
+          }
+          continue;
+        }
         if (t.building?.category === 'city_hall') continue;
 
         if (t.terrain === 'forest') {
           t.terrain = 'grass';
         }
 
+        const inCoreBlast = distSq <= 4;
         if (
           t.building &&
-          (t.building.category === 'residential' ||
-            (distSq <= 2 &&
-              t.building.category !== 'hospital' &&
-              t.building.category !== 'police' &&
-              t.building.category !== 'fire_station'))
+          (inCoreBlast ||
+            t.building.category === 'residential' ||
+            t.building.category === 'commercial' ||
+            t.building.category === 'park' ||
+            t.building.category === 'crops')
         ) {
           if (t.building.hasBasement) {
             this.floatingLabels.push({
@@ -6585,15 +7043,28 @@ export class CitySimulation {
           t.building = null;
         }
 
-        // Place scorched craters (including right on roads so traffic gets blocked and jammed)
-        if (!this.blastCraters.some((c) => c.x === t.x && c.y === t.y) && this.blastCraters.length < 18) {
+        // Tear up epicenter road tile into a deep ground-zero crater
+        if (distSq === 0 && t.hasRoad) {
+          t.hasRoad = false;
+          t.hasZebraCrossing = false;
+          this.cars = this.cars.filter(
+            (c) => Math.floor(c.wx / TILE_SIZE) !== t.x || Math.floor(c.wy / TILE_SIZE) !== t.y
+          );
+        }
+
+        // Place deep scorched nuke craters across core impact zone (including roads so traffic jams around craters)
+        if (
+          distSq <= 4 &&
+          !this.blastCraters.some((c) => c.x === t.x && c.y === t.y) &&
+          this.blastCraters.length < 64
+        ) {
           this.blastCraters.push({
             id: `crater_${this.craterIdCounter++}`,
             x: t.x,
             y: t.y,
             wx: (t.x + 0.5) * TILE_SIZE,
             wy: (t.y + 0.5) * TILE_SIZE,
-            radius: 9 + Math.random() * 5,
+            radius: distSq === 0 ? 17 : 10 + Math.random() * 4.5,
             age: 0,
           });
         }
@@ -6610,8 +7081,8 @@ export class CitySimulation {
           (!destroyedBuildingIds.has(p.homeBuildingId || '') &&
             !destroyedBuildingIds.has(p.destBuildingId || ''))
       );
-      this.rebuildCaches();
     }
+    this.rebuildCaches();
 
     // Start 2 contained fires inside blast zone
     let firesStarted = 0;
@@ -7825,7 +8296,7 @@ export class CitySimulation {
                 }
                 if (
                   !this.blastCraters.some((c) => c.x === targetTile.x && c.y === targetTile.y) &&
-                  this.blastCraters.length < 18
+                  this.blastCraters.length < 64
                 ) {
                   this.blastCraters.push({
                     id: `crater_${this.craterIdCounter++}`,
@@ -10567,9 +11038,10 @@ export class CitySimulation {
   }
 
   private updateDisasters(simDt: number, realDt: number, playAudio: boolean) {
-    // 1. Tornado
+    // 1. Tornado — destroys everything in its path (except City Hall & Basement buildings)
     if (this.crises.tornadoActive) {
       this.crises.tornadoRemaining = Math.max(0, this.crises.tornadoRemaining - simDt);
+      this.tornadoBasementLabelCooldown = Math.max(0, this.tornadoBasementLabelCooldown - realDt);
       this.crises.tornadoWx += this.tornadoVx * realDt;
       this.crises.tornadoWy += this.tornadoVy * realDt;
       if (this.crises.tornadoWx < TILE_SIZE * 2 || this.crises.tornadoWx > (this.gridCols - 2) * TILE_SIZE) {
@@ -10578,56 +11050,205 @@ export class CitySimulation {
       if (this.crises.tornadoWy < TILE_SIZE * 2 || this.crises.tornadoWy > (this.gridRows - 2) * TILE_SIZE) {
         this.tornadoVy *= -1;
       }
-      if (Math.random() < realDt * 12 && this.smokeParticles.length < 180) {
+      if (Math.random() < realDt * 14 && this.smokeParticles.length < 180) {
         this.smokeParticles.push({
-          wx: this.crises.tornadoWx + (Math.random() - 0.5) * 20,
+          wx: this.crises.tornadoWx + (Math.random() - 0.5) * 22,
           wy: this.crises.tornadoWy - 4 + (Math.random() - 0.5) * 14,
-          vx: (Math.random() - 0.5) * 32,
-          vy: -28 - Math.random() * 24,
+          vx: (Math.random() - 0.5) * 38,
+          vy: -32 - Math.random() * 26,
           age: 0,
-          maxAge: 0.7,
-          size: 4 + Math.random() * 4,
-          color: 'rgba(148, 163, 184, 0.75)',
+          maxAge: 0.75,
+          size: 4.5 + Math.random() * 4,
+          color: 'rgba(148, 163, 184, 0.78)',
         });
       }
+
       const tx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(this.crises.tornadoWx / TILE_SIZE)));
       const ty = Math.max(0, Math.min(this.gridRows - 1, Math.floor(this.crises.tornadoWy / TILE_SIZE)));
-      const tile = this.getTile(tx, ty);
-      if (tile) {
-        if (tile.terrain === 'forest' && Math.random() < simDt * 1.4) {
-          tile.terrain = 'grass';
+      let worldChanged = false;
+
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const tile = this.getTile(tx + dx, ty + dy);
+          if (!tile || tile.terrain === 'void') continue;
+          const tileCx = (tile.x + 0.5) * TILE_SIZE;
+          const tileCy = (tile.y + 0.5) * TILE_SIZE;
+          const dist = Math.hypot(tileCx - this.crises.tornadoWx, tileCy - this.crises.tornadoWy);
+          if (dist > TILE_SIZE * 0.72) continue;
+
+          if (tile.terrain === 'forest') {
+            tile.terrain = 'grass';
+            for (let k = 0; k < 4; k++) {
+              this.woodChips.push({
+                wx: tileCx + (Math.random() - 0.5) * 14,
+                wy: tileCy,
+                vx: (Math.random() - 0.5) * 52,
+                vy: -22 - Math.random() * 20,
+                age: 0,
+                maxAge: 0.65,
+                color: k % 2 === 0 ? '#16A34A' : '#78350F',
+              });
+            }
+          }
+
+          if (this.removeStallOnTile(tile.x, tile.y)) {
+            this.floatingLabels.push({
+              wx: tileCx,
+              wy: tileCy - 8,
+              text: 'Stall Swept Away!',
+              color: '#FEF2F2',
+              bgColor: '#475569',
+              age: 0,
+              maxAge: 1.6,
+            });
+          }
+          if (
+            this.pendingProposals.some((pr) => pr.x === tile.x && pr.y === tile.y) ||
+            this.activeConstructions.some((ac) => ac.x === tile.x && ac.y === tile.y)
+          ) {
+            this.clearPermitsAtTile(tile.x, tile.y);
+          }
+
+          if (tile.building && tile.building.category !== 'city_hall') {
+            if (tile.building.hasBasement) {
+              if (this.tornadoBasementLabelCooldown <= 0) {
+                this.tornadoBasementLabelCooldown = 1.6;
+                this.floatingLabels.push({
+                  wx: tileCx,
+                  wy: tileCy - 10,
+                  text: 'Sheltered in Basement!',
+                  color: '#ECFDF5',
+                  bgColor: '#047857',
+                  age: 0,
+                  maxAge: 1.6,
+                });
+              }
+            } else {
+              const ruined = tile.building;
+              this.floatingLabels.push({
+                wx: tileCx,
+                wy: tileCy - 10,
+                text: 'Tornado Wrecked!',
+                color: '#FEF2F2',
+                bgColor: '#475569',
+                age: 0,
+                maxAge: 2.0,
+              });
+              for (let k = 0; k < 6; k++) {
+                this.woodChips.push({
+                  wx: tileCx,
+                  wy: tileCy,
+                  vx: (Math.random() - 0.5) * 55,
+                  vy: -24 - Math.random() * 24,
+                  age: 0,
+                  maxAge: 0.7,
+                  color: k % 2 === 0 ? '#94A3B8' : '#78350F',
+                });
+              }
+              if (this.tornadoCasualtyCount < 4 && (ruined.category === 'residential' || ruined.totalVisits > 0)) {
+                this.spawnDeathEvent(ruined, false);
+                this.tornadoCasualtyCount++;
+              }
+              tile.building = null;
+              worldChanged = true;
+            }
+          }
+
+          // Destroy roads/bridges in direct vortex path
+          if (tile.terrain === 'water' && (tile.hasRoad || tile.hasFootbridge) && !tile.isBridgeBroken) {
+            tile.isBridgeBroken = true;
+            this.brokenBridges.push({
+              id: `br_${this.brokenBridgeIdCounter++}`,
+              x: tile.x,
+              y: tile.y,
+              wx: tileCx,
+              wy: tileCy,
+              kind: tile.hasRoad ? 'road' : 'footbridge',
+              elapsedSeconds: 0,
+              maxRepairSeconds: 32,
+              repairerDispatched: false,
+              repairerArrived: false,
+              status: 'broken',
+              statusTimer: 0,
+            });
+          } else if (dist < TILE_SIZE * 0.44 && tile.hasRoad && tile.terrain !== 'water') {
+            tile.hasRoad = false;
+            tile.hasZebraCrossing = false;
+            this.cars = this.cars.filter(
+              (c) => Math.floor(c.wx / TILE_SIZE) !== tile.x || Math.floor(c.wy / TILE_SIZE) !== tile.y
+            );
+            for (let ci = this.crashes.length - 1; ci >= 0; ci--) {
+              if (this.crashes[ci].x === tile.x && this.crashes[ci].y === tile.y) {
+                this.releaseCrashCars(this.crashes[ci].id);
+                this.crashes.splice(ci, 1);
+              }
+            }
+            worldChanged = true;
+          }
         }
-        if (
-          tile.building &&
-          tile.building.category !== 'city_hall' &&
-          !tile.building.hasBasement &&
-          Math.random() < simDt * 0.42
-        ) {
-          const ruined = tile.building;
+      }
+
+      // Toss non-emergency cars caught right inside the tornado vortex
+      for (let ci = this.cars.length - 1; ci >= 0; ci--) {
+        const car = this.cars[ci];
+        if (car.type === 'ambulance' || car.type === 'police' || car.type === 'firetruck') continue;
+        if (Math.hypot(car.wx - this.crises.tornadoWx, car.wy - this.crises.tornadoWy) < 20) {
+          for (let k = 0; k < 5; k++) {
+            this.woodChips.push({
+              wx: car.wx,
+              wy: car.wy,
+              vx: (Math.random() - 0.5) * 55,
+              vy: -24 - Math.random() * 20,
+              age: 0,
+              maxAge: 0.6,
+              color: car.color,
+            });
+          }
           this.floatingLabels.push({
-            wx: (tx + 0.5) * TILE_SIZE,
-            wy: (ty + 0.3) * TILE_SIZE,
-            text: 'Tornado Wrecked!',
+            wx: car.wx,
+            wy: car.wy - 8,
+            text: 'Car Tossed!',
             color: '#FEF2F2',
             bgColor: '#475569',
             age: 0,
-            maxAge: 2.0,
+            maxAge: 1.5,
           });
-          tile.building = null;
-          this.rebuildCaches();
-          void ruined;
-        } else if (tile.building?.hasBasement && Math.random() < simDt * 0.25) {
-          this.floatingLabels.push({
-            wx: (tx + 0.5) * TILE_SIZE,
-            wy: (ty + 0.3) * TILE_SIZE,
-            text: 'Sheltered in Basement!',
-            color: '#ECFDF5',
-            bgColor: '#047857',
-            age: 0,
-            maxAge: 1.6,
-          });
+          this.finishTrip(car);
+          this.cars.splice(ci, 1);
         }
       }
+
+      // Sweep away unsheltered outdoor pedestrians caught right inside the funnel
+      if (this.tornadoCasualtyCount < 5) {
+        for (let pi = this.people.length - 1; pi >= 0; pi--) {
+          const ped = this.people[pi];
+          if (ped.role === 'mayor' || ped.role === 'police' || ped.role === 'firefighter' || ped.role === 'medic') {
+            continue;
+          }
+          if (Math.hypot(ped.wx - this.crises.tornadoWx, ped.wy - this.crises.tornadoWy) < 16) {
+            const ptx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(ped.wx / TILE_SIZE)));
+            const pty = Math.max(0, Math.min(this.gridRows - 1, Math.floor(ped.wy / TILE_SIZE)));
+            this.recordCoordinateDeath(ptx, pty, ped.wx, ped.wy, this.describeArea(ptx, pty), playAudio);
+            this.floatingLabels.push({
+              wx: ped.wx,
+              wy: ped.wy - 10,
+              text: 'Swept Away!',
+              color: '#FEF2F2',
+              bgColor: '#991B1B',
+              age: 0,
+              maxAge: 1.8,
+            });
+            this.people.splice(pi, 1);
+            this.tornadoCasualtyCount++;
+            break;
+          }
+        }
+      }
+
+      if (worldChanged) {
+        this.rebuildCaches();
+      }
+
       if (this.crises.tornadoRemaining <= 0) {
         this.crises.tornadoActive = false;
       }
@@ -10645,12 +11266,138 @@ export class CitySimulation {
       this.earthquakeShakeIntensity = Math.max(0, this.earthquakeShakeIntensity - realDt * 2);
     }
 
-    // 3. Flood
+    // 3. Citywide Flood — entire city flooded, citizens climb tall buildings, some drown
     if (this.crises.floodActive) {
       this.crises.floodRemaining = Math.max(0, this.crises.floodRemaining - simDt);
+      for (const t of this.tiles) {
+        if (t.terrain !== 'void' && t.terrain !== 'water' && !t.isFlooded) {
+          t.isFlooded = true;
+        }
+      }
+
+      const tallShelters = this.buildingsList.filter((b) => this.isTallShelterBuilding(b));
+      if (tallShelters.length > 0 && Math.random() < simDt * 0.55) {
+        const currentSheltering = this.people.filter((p) => p.floodSheltering).length;
+        if (currentSheltering < 10) {
+          const lowPool = this.buildingsList.filter(
+            (b) => !this.isTallShelterBuilding(b) && b.category !== 'park' && b.category !== 'crops'
+          );
+          if (lowPool.length > 0) {
+            const orig = lowPool[Math.floor(Math.random() * lowPool.length)];
+            const shelter = this.findNearestTallShelter(
+              (orig.x + 0.5) * TILE_SIZE,
+              (orig.y + 0.5) * TILE_SIZE
+            );
+            if (shelter) {
+              const p: Person = {
+                id: `ppl_${this.personIdCounter++}`,
+                role: 'pedestrian',
+                wx: (orig.x + 0.5) * TILE_SIZE,
+                wy: (orig.y + 0.76) * TILE_SIZE,
+                targetWx: (shelter.x + 0.5) * TILE_SIZE,
+                targetWy: (shelter.y + 0.72) * TILE_SIZE,
+                speed: 48 + Math.random() * 8,
+                shirtColor: '#38BDF8',
+                animPhase: Math.random() * Math.PI * 2,
+                state: 'walking',
+                homeBuildingId: orig.id,
+                destBuildingId: shelter.id,
+                targetTileX: shelter.x,
+                targetTileY: shelter.y,
+                holdTimer: 18,
+                floodSheltering: true,
+              };
+              if (this.assignPedestrianRoute(p, shelter.x, shelter.y, p.targetWx, p.targetWy)) {
+                this.people.push(p);
+              }
+            }
+          }
+        }
+      }
+
+      // Some citizens caught outdoors / in flooded low areas drown
+      const totalPop = this.buildingsList
+        .filter((b) => b.category === 'residential')
+        .reduce((sum, b) => sum + (b.residents ?? Math.min(5, Math.max(1, b.capacity || 3))), 0);
+      const maxFloodDrownings = Math.min(6, Math.max(2, Math.floor(totalPop / 14)));
+      this.floodDrownAccumulator += simDt;
+      if (
+        this.floodDrownAccumulator >= 5.2 &&
+        this.floodDrownCount < maxFloodDrownings &&
+        totalPop > 0
+      ) {
+        this.floodDrownAccumulator = 0;
+        const outdoorVictims = this.people.filter(
+          (p) =>
+            p.role !== 'mayor' &&
+            p.role !== 'police' &&
+            p.role !== 'firefighter' &&
+            p.role !== 'medic' &&
+            p.role !== 'invader' &&
+            p.role !== 'kayaker'
+        );
+        if (outdoorVictims.length > 0 && Math.random() < 0.65) {
+          const victimIdx = Math.floor(Math.random() * outdoorVictims.length);
+          const victim = outdoorVictims[victimIdx];
+          const vtx = Math.max(0, Math.min(this.gridCols - 1, Math.floor(victim.wx / TILE_SIZE)));
+          const vty = Math.max(0, Math.min(this.gridRows - 1, Math.floor(victim.wy / TILE_SIZE)));
+          this.recordCoordinateDeath(vtx, vty, victim.wx, victim.wy, this.describeArea(vtx, vty), playAudio);
+          this.floatingLabels.push({
+            wx: victim.wx,
+            wy: victim.wy - 10,
+            text: 'Drowned!',
+            color: '#E0F2FE',
+            bgColor: '#1E40AF',
+            age: 0,
+            maxAge: 2.1,
+          });
+          for (let s = 0; s < 6; s++) {
+            this.woodChips.push({
+              wx: victim.wx,
+              wy: victim.wy,
+              vx: (Math.random() - 0.5) * 34,
+              vy: -12 - Math.random() * 14,
+              age: 0,
+              maxAge: 0.55,
+              color: s % 2 === 0 ? '#38BDF8' : '#BAE6FD',
+            });
+          }
+          const idxInPeople = this.people.findIndex((x) => x.id === victim.id);
+          if (idxInPeople !== -1) this.people.splice(idxInPeople, 1);
+          this.floodDrownCount++;
+        } else {
+          const floodedHouses = this.buildingsList.filter(
+            (b) => !this.isTallShelterBuilding(b) && b.category === 'residential'
+          );
+          if (floodedHouses.length > 0) {
+            const house = floodedHouses[Math.floor(Math.random() * floodedHouses.length)];
+            const wx = (house.x + 0.5) * TILE_SIZE;
+            const wy = (house.y + 0.6) * TILE_SIZE;
+            this.recordCoordinateDeath(house.x, house.y, wx, wy, house.name, playAudio);
+            this.floatingLabels.push({
+              wx,
+              wy: wy - 10,
+              text: 'Drowned!',
+              color: '#E0F2FE',
+              bgColor: '#1E40AF',
+              age: 0,
+              maxAge: 2.1,
+            });
+            this.floodDrownCount++;
+          }
+        }
+        if (this.floodDrownCount > 0 && !this.floodNewsLogged) {
+          this.floodNewsLogged = true;
+          this.logDailyNews('FLOOD CASUALTIES: Rising citywide waters swept low streets—some citizens drowned while others sheltered inside tall buildings.');
+        }
+      }
+
       if (this.crises.floodRemaining <= 0) {
         this.crises.floodActive = false;
         for (const t of this.tiles) t.isFlooded = false;
+        for (const p of this.people) {
+          if (p.floodSheltering) p.floodSheltering = false;
+        }
       }
     }
     void playAudio;
@@ -10755,6 +11502,7 @@ export class CitySimulation {
             this.people.push({
               id: `ppl_${this.personIdCounter++}`,
               role: 'student',
+              isChild: true,
               speechTopic: 'commute_in',
               wx: (home.x + 0.5) * TILE_SIZE - 4,
               wy: (home.y + 0.8) * TILE_SIZE,
@@ -10813,6 +11561,7 @@ export class CitySimulation {
                   this.people.push({
                     id: `ppl_${this.personIdCounter++}`,
                     role: 'student',
+                    isChild: true,
                     speechTopic: 'commute_out',
                     wx: (sch.x + 0.5) * TILE_SIZE - 4,
                     wy: (sch.y + 0.8) * TILE_SIZE,
@@ -10964,6 +11713,7 @@ export class CitySimulation {
           this.people.push({
             id: `ppl_${this.personIdCounter++}`,
             role: 'student',
+            isChild: true,
             speechTopic: 'playground',
             wx: (home.x + 0.5) * TILE_SIZE,
             wy: (home.y + 0.78) * TILE_SIZE,
@@ -11027,6 +11777,51 @@ export class CitySimulation {
     return candidates[candidates.length - 1];
   }
 
+  private isSafeLandAnimalTile(tile: MapTile | null): boolean {
+    if (!tile) return false;
+    if (tile.terrain === 'water' || tile.terrain === 'void') return false;
+    if (
+      tile.building &&
+      tile.building.category !== 'park' &&
+      tile.building.category !== 'crops' &&
+      tile.building.category !== 'road_path'
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  private rescueLandAnimalFromWater(ani: Animal) {
+    const curX = Math.max(0, Math.min(this.gridCols - 1, Math.floor(ani.wx / TILE_SIZE)));
+    const curY = Math.max(0, Math.min(this.gridRows - 1, Math.floor(ani.wy / TILE_SIZE)));
+    for (let r = 1; r <= 6; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          const candidate = this.getTile(curX + dx, curY + dy);
+          if (this.isSafeLandAnimalTile(candidate)) {
+            ani.wx = (candidate!.x + 0.5) * TILE_SIZE;
+            ani.wy = (candidate!.y + 0.5) * TILE_SIZE;
+            ani.targetWx = ani.wx;
+            ani.targetWy = ani.wy;
+            ani.vx = 0;
+            ani.vy = 0;
+            return;
+          }
+        }
+      }
+    }
+    const fallback = this.pickWeightedAnimalTile();
+    if (fallback) {
+      ani.wx = (fallback.x + 0.5) * TILE_SIZE;
+      ani.wy = (fallback.y + 0.5) * TILE_SIZE;
+      ani.targetWx = ani.wx;
+      ani.targetWy = ani.wy;
+      ani.vx = 0;
+      ani.vy = 0;
+    }
+  }
+
   private seedInitialAnimals() {
     const kinds: AnimalKind[] = ['bird', 'bird', 'bird', 'cow', 'cow', 'pig', 'pig', 'chicken', 'chicken'];
     const crops = this.buildingsList.filter((b) => b.category === 'crops');
@@ -11048,11 +11843,11 @@ export class CitySimulation {
         wy,
         vx: 0,
         vy: 0,
-        targetWx: wx + (Math.random() - 0.5) * 40,
-        targetWy: wy + (Math.random() - 0.5) * 40,
-        state: kind === 'bird' && Math.random() < 0.4 ? 'flying' : 'roaming',
+        targetWx: wx,
+        targetWy: wy,
+        state: kind === 'bird' && Math.random() < 0.4 ? 'flying' : 'grazing',
         animPhase: Math.random() * Math.PI * 2,
-        holdTimer: 2 + Math.random() * 4,
+        holdTimer: 1 + Math.random() * 3,
       });
     }
   }
@@ -11094,24 +11889,64 @@ export class CitySimulation {
           vy: 0,
           targetWx: wx,
           targetWy: wy,
-          state: kind === 'bird' ? 'flying' : 'roaming',
+          state: kind === 'bird' ? 'flying' : 'grazing',
           animPhase: Math.random() * Math.PI * 2,
-          holdTimer: 2 + Math.random() * 3,
+          holdTimer: 1 + Math.random() * 2.5,
         });
       }
     }
 
-    // 3. Step Animal movement & grazing
+    // 3. Step Animal movement & grazing (land animals NEVER enter water/void tiles)
     for (const ani of this.animals) {
       ani.animPhase += realDt * (ani.state === 'flying' ? 12 : 4.5);
       ani.holdTimer -= realDt;
+
+      if (ani.kind !== 'bird') {
+        const curTile = this.getTile(
+          Math.floor(ani.wx / TILE_SIZE),
+          Math.floor(ani.wy / TILE_SIZE)
+        );
+        if (!this.isSafeLandAnimalTile(curTile)) {
+          this.rescueLandAnimalFromWater(ani);
+        }
+      }
+
       if (ani.state === 'grazing') {
         if (ani.holdTimer <= 0) {
-          ani.state = ani.kind === 'bird' && Math.random() < 0.65 ? 'flying' : 'roaming';
-          const range = ani.kind === 'bird' ? 110 : 54;
-          ani.targetWx = Math.max(24, Math.min(this.gridCols * TILE_SIZE - 24, ani.wx + (Math.random() - 0.5) * range));
-          ani.targetWy = Math.max(24, Math.min(this.gridRows * TILE_SIZE - 24, ani.wy + (Math.random() - 0.5) * range));
-          ani.holdTimer = 3 + Math.random() * 3;
+          if (ani.kind === 'bird') {
+            ani.state = Math.random() < 0.65 ? 'flying' : 'roaming';
+            ani.targetWx = Math.max(24, Math.min(this.gridCols * TILE_SIZE - 24, ani.wx + (Math.random() - 0.5) * 110));
+            ani.targetWy = Math.max(24, Math.min(this.gridRows * TILE_SIZE - 24, ani.wy + (Math.random() - 0.5) * 110));
+            ani.holdTimer = 3 + Math.random() * 3;
+          } else {
+            let foundTarget = false;
+            for (let attempt = 0; attempt < 8; attempt++) {
+              const candWx = Math.max(
+                24,
+                Math.min(this.gridCols * TILE_SIZE - 24, ani.wx + (Math.random() - 0.5) * 58)
+              );
+              const candWy = Math.max(
+                24,
+                Math.min(this.gridRows * TILE_SIZE - 24, ani.wy + (Math.random() - 0.5) * 58)
+              );
+              const tEnd = this.getTile(Math.floor(candWx / TILE_SIZE), Math.floor(candWy / TILE_SIZE));
+              const tMid = this.getTile(
+                Math.floor(((ani.wx + candWx) * 0.5) / TILE_SIZE),
+                Math.floor(((ani.wy + candWy) * 0.5) / TILE_SIZE)
+              );
+              if (this.isSafeLandAnimalTile(tEnd) && this.isSafeLandAnimalTile(tMid)) {
+                ani.state = 'roaming';
+                ani.targetWx = candWx;
+                ani.targetWy = candWy;
+                ani.holdTimer = 3 + Math.random() * 3;
+                foundTarget = true;
+                break;
+              }
+            }
+            if (!foundTarget) {
+              ani.holdTimer = 1.5 + Math.random() * 2;
+            }
+          }
         }
       } else {
         const dx = ani.targetWx - ani.wx;
@@ -11120,12 +11955,31 @@ export class CitySimulation {
         const speed = ani.state === 'flying' ? 42 : ani.kind === 'cow' ? 12 : 16;
         if (dist <= 3 || ani.holdTimer <= 0) {
           ani.state = 'grazing';
+          ani.vx = 0;
+          ani.vy = 0;
           ani.holdTimer = 2.5 + Math.random() * 4;
         } else {
-          ani.vx = (dx / dist) * speed;
-          ani.vy = (dy / dist) * speed;
-          ani.wx += ani.vx * realDt;
-          ani.wy += ani.vy * realDt;
+          const nvx = (dx / dist) * speed;
+          const nvy = (dy / dist) * speed;
+          const nextWx = ani.wx + nvx * realDt;
+          const nextWy = ani.wy + nvy * realDt;
+          if (ani.kind !== 'bird') {
+            const probeX = nextWx + (dx / dist) * 5;
+            const probeY = nextWy + (dy / dist) * 5;
+            const nextTile = this.getTile(Math.floor(nextWx / TILE_SIZE), Math.floor(nextWy / TILE_SIZE));
+            const probeTile = this.getTile(Math.floor(probeX / TILE_SIZE), Math.floor(probeY / TILE_SIZE));
+            if (!this.isSafeLandAnimalTile(nextTile) || !this.isSafeLandAnimalTile(probeTile)) {
+              ani.state = 'grazing';
+              ani.vx = 0;
+              ani.vy = 0;
+              ani.holdTimer = 1.2 + Math.random() * 1.5;
+              continue;
+            }
+          }
+          ani.vx = nvx;
+          ani.vy = nvy;
+          ani.wx = nextWx;
+          ani.wy = nextWy;
         }
       }
     }
@@ -11671,6 +12525,7 @@ export class CitySimulation {
             this.people.push({
               id: `ppl_${this.personIdCounter++}`,
               role: 'student',
+              isChild: k > 0,
               wx: (sch.x + 0.5) * TILE_SIZE + (k - 1.5) * 3,
               wy: (sch.y + 0.78) * TILE_SIZE,
               targetWx: (dest.x + 0.5) * TILE_SIZE + (k - 1.5) * 4,
@@ -12100,11 +12955,13 @@ export class CitySimulation {
     const durationGameMinutes = Math.round(durationRaw / 10) * 10;
     const areaName = this.describeArea(lot.x, lot.y);
 
+    const proposedPlotName = this.generateUniquePlotName(spec.displayName || baseBp.name, undefined, true);
+
     this.pendingProposals.push({
       id: `prop_${this.proposalIdCounter++}`,
       applicantName,
       blueprintId: baseBp.id,
-      blueprintName: spec.displayName || baseBp.name,
+      blueprintName: proposedPlotName,
       category: baseBp.category,
       iconGrid: [...baseBp.iconGrid],
       accentColor: baseBp.accentColor,

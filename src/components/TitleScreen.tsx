@@ -1,33 +1,47 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, Compass, X } from 'lucide-react';
+import { BookOpen, Compass, RotateCcw, Trash2, X } from 'lucide-react';
 import { BIOME_TEMPLATES, PRESET_MAPS } from '../data/defaultBlueprints';
-import { MapTemplateKind, SavedMapData } from '../types/game';
+import { MapTemplateKind, SavedMapData, TrashedMapEntry } from '../types/game';
 
 interface TitleScreenProps {
   selectedPresetId: string;
   savedMaps: SavedMapData[];
+  trashedMaps: TrashedMapEntry[];
+  hiddenPresetIds: string[];
   onSelectMap: (map: SavedMapData) => void;
   onCreateBiomeMap: (template: MapTemplateKind) => void;
+  onDeleteWorld: (map: SavedMapData) => void;
+  onRestoreTrashedMap: (id: string) => void;
+  onPermanentDeleteTrashedMap: (id: string) => void;
+  onEmptyTrash: () => void;
   onStartGame: () => void;
 }
 
 export function TitleScreen({
   selectedPresetId,
   savedMaps,
+  trashedMaps,
+  hiddenPresetIds,
   onSelectMap,
   onCreateBiomeMap,
+  onDeleteWorld,
+  onRestoreTrashedMap,
+  onPermanentDeleteTrashedMap,
+  onEmptyTrash,
   onStartGame,
 }: TitleScreenProps) {
   const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [isTrashOpen, setIsTrashOpen] = useState(false);
   const [tab, setTab] = useState<'scenarios' | 'biomes'>('scenarios');
   const [selectedBiome, setSelectedBiome] = useState<MapTemplateKind | null>(null);
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (isGuideOpen) {
+      if (isGuideOpen || isTrashOpen) {
         if (e.key === 'Escape') {
           e.preventDefault();
           setIsGuideOpen(false);
+          setIsTrashOpen(false);
         }
         return;
       }
@@ -38,9 +52,10 @@ export function TitleScreen({
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [onStartGame, isGuideOpen]);
+  }, [onStartGame, isGuideOpen, isTrashOpen]);
 
-  const allMaps = [...PRESET_MAPS, ...savedMaps];
+  const visiblePresets = PRESET_MAPS.filter((p) => !hiddenPresetIds.includes(p.id));
+  const allMaps = [...savedMaps, ...visiblePresets];
 
   return (
     <div className="absolute inset-0 z-30 transform-gpu pointer-events-none">
@@ -96,7 +111,7 @@ export function TitleScreen({
             </svg>
 
             <p className="text-sm md:text-base text-slate-300 leading-relaxed max-w-md">
-              Build living towns, shape islands or jungles, grow cities every 10 days, snap &amp; crop daily news photos, and weather chaos.
+              Build living towns, approve citizen building permits, shape islands or jungles, grow cities every 10 days, snap news photos, and weather chaos.
             </p>
           </div>
 
@@ -132,32 +147,54 @@ export function TitleScreen({
             </div>
 
             {tab === 'scenarios' ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {allMaps.slice(0, 6).map((m) => {
-                  const active = m.id === selectedPresetId && selectedBiome === null;
-                  const cleanSubtitle = m.subtitle.replace(/^Day\s+\d+\s*·\s*/i, '');
-                  return (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedBiome(null);
-                        onSelectMap(m);
-                      }}
-                      className={`text-left p-3 rounded-lg border transition-colors ${
-                        active
-                          ? 'bg-slate-800/95 border-amber-400 text-white'
-                          : 'bg-slate-900/80 border-slate-700/70 text-slate-300 hover:border-slate-500 hover:bg-slate-800/70'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-1.5">
-                        <span className="text-sm font-semibold truncate">{m.name}</span>
+              allMaps.length === 0 ? (
+                <div className="p-4 rounded-lg border border-dashed border-slate-700 bg-slate-900/70 text-xs text-slate-400 text-center">
+                  All worlds are in the Trash Bin. Restore one from Trash Bin or pick a New Biome!
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto touch-pan-y pr-1">
+                  {allMaps.map((m) => {
+                    const active = m.id === selectedPresetId && selectedBiome === null;
+                    const cleanSubtitle = m.subtitle.replace(/^Day\s+\d+\s*·\s*/i, '');
+                    return (
+                      <div
+                        key={m.id}
+                        className={`relative group rounded-lg border transition-colors ${
+                          active
+                            ? 'bg-slate-800/95 border-amber-400 text-white'
+                            : 'bg-slate-900/80 border-slate-700/70 text-slate-300 hover:border-slate-500 hover:bg-slate-800/70'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedBiome(null);
+                            onSelectMap(m);
+                          }}
+                          className="w-full text-left p-3 pr-9"
+                        >
+                          <div className="flex items-center justify-between gap-1.5">
+                            <span className="text-sm font-semibold truncate">{m.name}</span>
+                          </div>
+                          <div className="text-xs text-slate-400 truncate mt-0.5">{cleanSubtitle}</div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteWorld(m);
+                          }}
+                          title="Move world to Trash Bin"
+                          aria-label={`Move ${m.name} to Trash Bin`}
+                          className="absolute top-2.5 right-2 p-1.5 rounded-md text-slate-400 hover:text-rose-300 hover:bg-rose-950/70 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
-                      <div className="text-xs text-slate-400 truncate mt-0.5">{cleanSubtitle}</div>
-                    </button>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {BIOME_TEMPLATES.map((tpl) => {
@@ -193,8 +230,8 @@ export function TitleScreen({
             )}
           </div>
 
-          {/* Primary CTA & Guide Book */}
-          <div className="flex flex-wrap items-center gap-3">
+          {/* Primary CTA, Guide Book & Trash Bin */}
+          <div className="flex flex-wrap items-center gap-2.5">
             <button
               type="button"
               onClick={onStartGame}
@@ -210,14 +247,115 @@ export function TitleScreen({
               <BookOpen className="w-4 h-4 text-amber-300" />
               Guide Book
             </button>
+            <button
+              type="button"
+              onClick={() => setIsTrashOpen(true)}
+              className="flex items-center gap-2 px-3.5 py-3 rounded-lg bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-slate-200 font-semibold text-sm transition-colors shadow cursor-pointer whitespace-nowrap shrink-0"
+              title="View removed worlds in Trash Bin"
+            >
+              <Trash2 className="w-4 h-4 text-rose-400" />
+              Trash Bin ({trashedMaps.length})
+            </button>
           </div>
 
           {/* Single flat control-hint line */}
           <div className="pt-2 border-t border-slate-800/80 text-xs text-slate-400 font-mono-tabular">
-            Slide Paint Plots · L Expand Land · F Find Places · News Photo &amp; Paperboy · Space Pause
+            Slide Paint Plots · Permits &amp; Mayor File · L Expand Land · F Find Places · Space Pause
           </div>
         </div>
       </div>
+
+      {/* Trash Bin Modal */}
+      {isTrashOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 pointer-events-auto"
+          onWheel={(e) => e.stopPropagation()}
+        >
+          <div className="w-full max-w-lg bg-[#0F172A] border border-slate-700 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[82dvh] text-slate-100">
+            <div className="flex items-center justify-between px-5 py-4 bg-slate-900 border-b border-slate-800 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <Trash2 className="w-5 h-5 text-rose-400" />
+                <div>
+                  <h2 className="font-display text-lg font-bold text-white">World Trash Bin</h2>
+                  <p className="text-[11px] text-slate-400">Restore removed worlds anytime or delete them permanently</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsTrashOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                aria-label="Close trash bin"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto touch-pan-y space-y-2.5">
+              {trashedMaps.length === 0 ? (
+                <div className="text-xs text-slate-400 border border-dashed border-slate-800 rounded-lg p-6 text-center">
+                  Trash Bin is empty. Removed worlds appear here first so you never lose a town by accident.
+                </div>
+              ) : (
+                trashedMaps.map((entry) => (
+                  <div
+                    key={entry.map.id}
+                    className="flex items-center justify-between gap-3 p-3 rounded-lg bg-slate-900/80 border border-slate-800"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-white truncate">{entry.map.name}</div>
+                      <div className="text-xs text-slate-400 truncate">
+                        {entry.map.subtitle.replace(/^Day\s+\d+\s*·\s*/i, '')} · Removed{' '}
+                        {new Date(entry.deletedAt).toLocaleDateString()}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => onRestoreTrashedMap(entry.map.id)}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-semibold transition-colors"
+                        title="Restore world"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        Restore
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onPermanentDeleteTrashedMap(entry.map.id)}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded bg-rose-500/15 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 text-xs font-semibold transition-colors"
+                        title="Permanently delete world"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="px-5 py-3 bg-slate-900 border-t border-slate-800 flex items-center justify-between gap-2 shrink-0">
+              {trashedMaps.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={onEmptyTrash}
+                  className="px-3 py-1.5 rounded-lg bg-rose-950/70 hover:bg-rose-900 border border-rose-700/60 text-rose-200 font-semibold text-xs transition-colors"
+                >
+                  Empty Trash Forever
+                </button>
+              ) : (
+                <span />
+              )}
+              <button
+                type="button"
+                onClick={() => setIsTrashOpen(false)}
+                className="px-4 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold text-xs transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Concise Player Guide Book Modal */}
       {isGuideOpen && (
@@ -241,39 +379,46 @@ export function TitleScreen({
               </button>
             </div>
 
-            <div className="p-5 overflow-y-auto touch-pan-y space-y-3.5 text-xs leading-relaxed text-slate-300">
+            <div className="p-5 overflow-y-auto touch-pan-y space-y-3 text-xs leading-relaxed text-slate-300">
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-amber-300 mb-1">1. Biomes &amp; 10-Day Map Expansion</div>
+                <div className="font-semibold text-amber-300 mb-1">1. Biomes, Trash Bin &amp; 10-Day Expansion</div>
                 <p>
-                  Play prebuilt cities or create a Valley, Sandy Island, Isolated Islands, Jungle, River, or Pond. Every 10 days (Day 10, 20, 30...), you unlock 100 boxes of custom Land (press L) to expand wherever you wish!
+                  Play prebuilt towns or create a Valley, Island, Archipelago, Jungle, River, or Pond. Removed worlds go safely to the Trash Bin where you can Restore or permanently Delete them. Every 10 days unlocks 100 custom Land boxes (press L).
                 </p>
               </div>
 
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-sky-300 mb-1">2. Daily Schedule, Stores &amp; Foggy Traffic</div>
+                <div className="font-semibold text-sky-300 mb-1">2. Daily Schedule, Electronics Shop &amp; Meat Stalls</div>
                 <p>
-                  Schools hold up to 100 students Mon–Fri (08:00–16:00), and stores open 06:00–22:00 before closing at night. Watch out on occasional Foggy days when cars crash more often!
+                  Schools hold up to 100 students Mon–Fri (08:00–16:00). Stores including the Electronics Shop open 06:00–22:00, and butchers supply pop-up Meat Stalls. Watch for extra crashes on occasional Foggy days!
                 </p>
               </div>
 
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-emerald-300 mb-1">3. Clustered Woods, Map Finder &amp; Smooth Refresh</div>
+                <div className="font-semibold text-violet-300 mb-1">3. Mayor Building Permits &amp; Citizen Proposals</div>
                 <p>
-                  Clumps of forest trees spawn cows, pigs, chickens, and birds. Use the Map button beside News to jump to any place, and press Refresh anytime to clear heavy lag without restarting your town.
+                  Citizens propose building new houses, shops, offices, and venues on open plots, listing the requested building, location, and build duration in game time. Open the Permits file (or click the plot) to Allow or Decline!
                 </p>
               </div>
 
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-amber-300 mb-1">4. News Photo Cropper, Paperboy &amp; Reader Remarks</div>
+                <div className="font-semibold text-emerald-300 mb-1">4. Wildlife, Boats &amp; Traffic Courtesy</div>
                 <p>
-                  Open News once per day to take a high-res photo, crop your frame, write the headline, and publish! A bicycling paperboy delivers papers to houses as funny citizen comments roll in.
+                  Tree clumps spawn dry-land livestock and birds, while humans build canoes and boats along wide waters. Drivers swerve or wait when animals cross roads. Use Map Finder (F) or Refresh anytime.
                 </p>
               </div>
 
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-rose-300 mb-1">5. Disasters &amp; Underground Basements</div>
+                <div className="font-semibold text-amber-300 mb-1">5. News Photo Cropper, Paperboy &amp; Reader Remarks</div>
                 <p>
-                  Select City Hall to trigger Tornadoes, Earthquakes, Floods, Wars, or a Nuke. After a nuclear strike, the Mayor urges citizens to build underground basements that protect buildings from future blasts.
+                  Open News once per day to capture a high-res photo, crop your frame, write the headline, and publish. A bicycling paperboy delivers papers to houses as funny citizen comments roll in.
+                </p>
+              </div>
+
+              <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
+                <div className="font-semibold text-rose-300 mb-1">6. Disasters, Nuke Craters &amp; Basements</div>
+                <p>
+                  City Hall chaos causes real damage: Nukes blast deep craters, Earthquakes split land with water rifts, Tornadoes destroy everything in their path, and Floods submerge the entire city as people rush into tall buildings. Build underground basements to survive strikes!
                 </p>
               </div>
             </div>

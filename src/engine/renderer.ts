@@ -283,6 +283,29 @@ export function renderSimulation(
     }
   }
 
+  // 2.2 Citywide Floodwater Surge Layer across streets, yards & low ground
+  if (sim.crises.floodActive) {
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const tile = sim.tiles[y * sim.gridCols + x];
+        if (!tile.isFlooded || tile.terrain === 'water' || tile.terrain === 'void') continue;
+        const fx = x * TILE_SIZE;
+        const fy = y * TILE_SIZE;
+        const wave = Math.sin(wallTimeSeconds * 3.4 + x * 0.65 + y * 0.45) * 0.05;
+        ctx.fillStyle = `rgba(14, 116, 144, ${0.34 + wave})`;
+        ctx.fillRect(fx, fy, TILE_SIZE, TILE_SIZE);
+        ctx.strokeStyle = 'rgba(186, 230, 253, 0.42)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(fx + 5, fy + 16 + Math.sin(wallTimeSeconds * 2.8 + x) * 2);
+        ctx.lineTo(fx + 22, fy + 16 + Math.sin(wallTimeSeconds * 2.8 + x) * 2);
+        ctx.moveTo(fx + 24, fy + 34 + Math.cos(wallTimeSeconds * 2.4 + y) * 2);
+        ctx.lineTo(fx + 43, fy + 34 + Math.cos(wallTimeSeconds * 2.4 + y) * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
   // 2.5 Render Neighbourhood Zone Highlights & Blast Craters
   drawNeighbourhoodZones(ctx, sim);
   drawBlastCraters(ctx, sim, wallTimeSeconds);
@@ -293,6 +316,25 @@ export function renderSimulation(
       const tile = sim.tiles[y * sim.gridCols + x];
       if (!tile.building || tile.terrain === 'void') continue;
       drawBuildingTile(ctx, sim, tile, shadowOffsetX, shadowOffsetY, wallTimeSeconds);
+      if (sim.crises.floodActive && tile.isFlooded) {
+        const fx = x * TILE_SIZE;
+        const fy = y * TILE_SIZE;
+        if (!sim.isTallShelterBuilding(tile.building)) {
+          // Low buildings sit partially submerged in floodwater
+          ctx.fillStyle = 'rgba(3, 105, 161, 0.36)';
+          ctx.fillRect(fx + 4, fy + TILE_SIZE * 0.56, TILE_SIZE - 8, TILE_SIZE * 0.38);
+          ctx.strokeStyle = 'rgba(186, 230, 253, 0.6)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(fx + 6, fy + TILE_SIZE * 0.56 + Math.sin(wallTimeSeconds * 3 + x) * 1.3);
+          ctx.lineTo(fx + TILE_SIZE - 6, fy + TILE_SIZE * 0.56 + Math.cos(wallTimeSeconds * 3 + y) * 1.3);
+          ctx.stroke();
+        } else {
+          // Tall shelter buildings show water lapping only at the base while upper floors stay dry
+          ctx.fillStyle = 'rgba(3, 105, 161, 0.32)';
+          ctx.fillRect(fx + 4, fy + TILE_SIZE - 10, TILE_SIZE - 8, 6);
+        }
+      }
     }
   }
 
@@ -1904,6 +1946,9 @@ function drawCar(ctx: CanvasRenderingContext2D, car: Car, nightFactor: number) {
   ctx.save();
   ctx.translate(car.wx, car.wy);
   ctx.rotate(car.angle);
+  if (car.swerveOffset) {
+    ctx.translate(0, car.swerveOffset);
+  }
 
   let len = 13;
   let wid = 7.4;
@@ -2584,6 +2629,19 @@ function drawPeople(ctx: CanvasRenderingContext2D, sim: CitySimulation, wallTime
   const isRaining = sim.isRainingOrStorming();
   const sorted = [...sim.people].sort((a, b) => a.wy - b.wy);
   for (const p of sorted) {
+    if (sim.crises.floodActive && p.role !== 'kayaker') {
+      const pt = sim.getTile(Math.floor(p.wx / TILE_SIZE), Math.floor(p.wy / TILE_SIZE));
+      if (pt?.isFlooded) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(186, 230, 253, 0.78)';
+        ctx.lineWidth = 1.1;
+        const r = 4.5 + Math.abs(Math.sin(wallTimeSeconds * 7 + p.animPhase)) * 2.2;
+        ctx.beginPath();
+        ctx.ellipse(p.wx, p.wy + 2.2, r, r * 0.45, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
     drawPersonSprite(ctx, p, wallTimeSeconds, sim.season, isRaining);
   }
 }
@@ -2837,10 +2895,20 @@ function drawPersonSprite(
     ctx.stroke();
   }
 
+  const isKid = Boolean(p.isChild || (p.role === 'student' && p.shirtColor !== '#0F766E'));
+
   // Ground shadow
   ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
   ctx.beginPath();
-  ctx.ellipse(0, 3.5, p.role === 'paperboy' || p.hasBicycle ? 7.5 : 4.2, 2.2, 0, 0, Math.PI * 2);
+  ctx.ellipse(
+    0,
+    3.5,
+    p.role === 'paperboy' || p.hasBicycle ? 7.5 : isKid ? 3.2 : 4.2,
+    isKid ? 1.7 : 2.2,
+    0,
+    0,
+    Math.PI * 2
+  );
   ctx.fill();
 
   // Bicycle under delivering paperboy
@@ -2897,6 +2965,14 @@ function drawPersonSprite(
     ctx.fillStyle = '#FACC15';
     ctx.fillRect(-4, 4.2, 1.6, 1.2);
     ctx.fillRect(2.4, 4.2, 1.6, 1.2);
+  }
+
+  ctx.save();
+  if (isKid) {
+    // Anchor feet at ground level (y = 3.5) and scale kids noticeably shorter than adults
+    ctx.translate(0, 3.5);
+    ctx.scale(0.84, 0.7);
+    ctx.translate(0, -3.5);
   }
 
   const bodyY = -bob;
@@ -3913,6 +3989,7 @@ function drawPersonSprite(
     ctx.stroke();
   }
 
+  ctx.restore();
   ctx.restore();
 }
 
