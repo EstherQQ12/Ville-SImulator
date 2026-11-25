@@ -6014,14 +6014,24 @@ export class CitySimulation {
       }
     }
 
-    // 3. Spawn Beggars logically from homes (disabled during curfew)
+    // 3. Spawn Beggars logically from homes (many more during Poverty crisis)
     const activeBeggars = this.people.filter((p) => p.role === 'beggar').length;
-    const maxBeggars = curfew ? 0 : this.crises.povertyActive ? 5 : this.buildingsList.length >= 4 ? 1 : 0;
+    const maxBeggars = this.crises.povertyActive
+      ? Math.min(28, Math.max(16, Math.floor(this.buildingsList.length * 0.55)))
+      : curfew
+      ? 0
+      : this.buildingsList.length >= 4
+      ? 1
+      : 0;
     if (activeBeggars < maxBeggars) {
       this.beggarSpawnAccumulator += simDt;
-      if (this.beggarSpawnAccumulator >= (this.crises.povertyActive ? 5.0 : 18.0)) {
+      const interval = this.crises.povertyActive ? 0.85 : 18.0;
+      if (this.beggarSpawnAccumulator >= interval) {
         this.beggarSpawnAccumulator = 0;
         this.spawnBeggar();
+        if (this.crises.povertyActive && activeBeggars + 1 < Math.floor(maxBeggars * 0.6)) {
+          this.spawnBeggar();
+        }
       }
     }
 
@@ -6143,7 +6153,7 @@ export class CitySimulation {
 
       if (p.role === 'beggar') {
         const isWarPanic = this.crises.warActive || this.people.some((o) => o.role === 'invader');
-        if ((curfew || isWarPanic) && p.state !== 'returning') {
+        if (((curfew && !this.crises.povertyActive) || isWarPanic) && p.state !== 'returning') {
           p.isPanicking = isWarPanic;
           p.speed = isWarPanic ? 48 : Math.max(p.speed, 38);
           if (!this.assignReturnRoute(p)) this.people.splice(i, 1);
@@ -6506,14 +6516,32 @@ export class CitySimulation {
     return false;
   }
 
-  private spawnBeggar() {
-    const homes = this.buildingsList.filter(
+  private spawnBeggar(): boolean {
+    const primaryHomes = this.buildingsList.filter(
       (b) => b.category === 'residential' || b.category === 'park' || b.category === 'cemetery'
     );
-    const hubs = this.buildingsList.filter(
+    const homes =
+      primaryHomes.length > 0
+        ? primaryHomes
+        : this.buildingsList.filter((b) => b.category !== 'road_path');
+
+    const primaryHubs = this.buildingsList.filter(
       (b) => b.category === 'commercial' || b.category === 'visit_spot' || b.category === 'city_hall'
     );
-    if (homes.length === 0 || hubs.length === 0) return;
+    const secondaryHubs = this.buildingsList.filter(
+      (b) =>
+        b.category === 'workplace' ||
+        b.category === 'school' ||
+        b.category === 'hospital' ||
+        b.category === 'park' ||
+        b.category === 'residential'
+    );
+    const hubs = this.crises.povertyActive
+      ? [...primaryHubs, ...secondaryHubs]
+      : primaryHubs.length > 0
+      ? primaryHubs
+      : secondaryHubs;
+    if (homes.length === 0 || hubs.length === 0) return false;
 
     const dirs = [
       { dx: 0, dy: 1 },
@@ -6524,22 +6552,30 @@ export class CitySimulation {
     const shuffledHomes = [...homes].sort(() => Math.random() - 0.5);
     const shuffledHubs = [...hubs].sort(() => Math.random() - 0.5);
 
-    for (const home of shuffledHomes.slice(0, 5)) {
-      for (const hub of shuffledHubs.slice(0, 5)) {
-        for (const d of dirs) {
+    for (const home of shuffledHomes.slice(0, 8)) {
+      for (const hub of shuffledHubs.slice(0, 8)) {
+        const shuffledDirs = [...dirs].sort(() => Math.random() - 0.5);
+        for (const d of shuffledDirs) {
           const spot = this.getTile(hub.x + d.dx, hub.y + d.dy);
-          if (!spot || spot.hasRoad || spot.terrain !== 'grass' || spot.building) continue;
+          if (
+            !spot ||
+            spot.hasRoad ||
+            (spot.terrain !== 'grass' && spot.terrain !== 'sand') ||
+            spot.building
+          ) {
+            continue;
+          }
           const path = this.findPedestrianPath(this.tiles, { x: home.x, y: home.y }, { x: spot.x, y: spot.y });
           if (path) {
-            const coats = ['#57534E', '#64748B', '#78350F', '#4D7C0F'];
+            const coats = ['#57534E', '#64748B', '#78350F', '#4D7C0F', '#71717A'];
             this.people.push({
               id: `ppl_${this.personIdCounter++}`,
               role: 'beggar',
               wx: (home.x + 0.5) * TILE_SIZE,
               wy: (home.y + 0.78) * TILE_SIZE,
-              targetWx: (spot.x + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 8,
-              targetWy: (spot.y + 0.65) * TILE_SIZE,
-              speed: 19,
+              targetWx: (spot.x + 0.5) * TILE_SIZE + (Math.random() - 0.5) * 16,
+              targetWy: (spot.y + 0.62) * TILE_SIZE + (Math.random() - 0.5) * 8,
+              speed: 19 + Math.random() * 4,
               shirtColor: coats[Math.floor(Math.random() * coats.length)],
               animPhase: Math.random() * Math.PI * 2,
               state: 'walking',
@@ -6550,11 +6586,12 @@ export class CitySimulation {
               pedestrianPathIndex: path.length > 1 ? 1 : 0,
               holdTimer: 0,
             });
-            return;
+            return true;
           }
         }
       }
     }
+    return false;
   }
 
   public triggerCrisis(type: CrisisType, active?: boolean, playAudio = true) {
@@ -6627,6 +6664,19 @@ export class CitySimulation {
     } else if (type === 'poverty') {
       this.crises.povertyActive = nextState;
       this.crises.povertyRemaining = nextState ? 85 : 0;
+      if (nextState) {
+        this.beggarSpawnAccumulator = 0;
+        const burstCount = Math.min(12, Math.max(6, Math.floor(this.buildingsList.length * 0.25)));
+        for (let b = 0; b < burstCount; b++) {
+          this.spawnBeggar();
+        }
+      } else {
+        for (const p of this.people) {
+          if (p.role === 'beggar' && p.state === 'begging') {
+            p.holdTimer = Math.min(p.holdTimer, 6);
+          }
+        }
+      }
     } else if (type === 'pollution') {
       this.crises.pollutionActive = nextState;
       this.crises.pollutionRemaining = nextState ? 110 : 0;
