@@ -31,6 +31,7 @@ export interface RenderOptions {
   camera: CameraState;
   hover: HoverState;
   selection: SelectionTarget | null;
+  selectedCarId?: string | null;
   toolMode: ToolMode;
   activeBlueprint: BuildingBlueprint | null;
   showTrafficOverlay: boolean;
@@ -139,7 +140,7 @@ export function renderSimulation(
   sim: CitySimulation,
   opts: RenderOptions
 ) {
-  const { camera, hover, selection, toolMode, activeBlueprint, showTrafficOverlay, showGrid, wallTimeSeconds } = opts;
+  const { camera, hover, selection, selectedCarId, toolMode, activeBlueprint, showTrafficOverlay, showGrid, wallTimeSeconds } = opts;
   const { nightFactor, goldenFactor, shadowOffsetX, shadowOffsetY } = getDaylightFactors(sim.minutesOfDay);
 
   // Outer horizon backdrop (cheerful sky-teal by day, starry deep blue by night)
@@ -345,13 +346,17 @@ export function renderSimulation(
   drawMarketStalls(ctx, sim, wallTimeSeconds);
   drawProposalsAndConstructions(ctx, sim, wallTimeSeconds);
 
-  // 4. Render Cars, Hover Destination & Crashes
+  // 4. Render Cars, Hover/Selected Destination & Crashes
   for (const car of sim.cars) {
     drawCar(ctx, car, nightFactor);
   }
   drawCarCrashes(ctx, sim, wallTimeSeconds);
+  const selectedCar = selectedCarId ? sim.cars.find((c) => c.id === selectedCarId) : undefined;
+  if (selectedCar) {
+    drawCarTooltipBadge(ctx, selectedCar, true);
+  }
   if (hover.visible && hover.worldX !== undefined && hover.worldY !== undefined) {
-    drawHoveredCarTooltip(ctx, sim, hover.worldX, hover.worldY);
+    drawHoveredCarTooltip(ctx, sim, hover.worldX, hover.worldY, selectedCar?.id);
   }
 
   // 4.5 Render Snowmen, Animals, People, Wood Chips, Confetti, Flames & Smoke
@@ -1768,11 +1773,46 @@ function drawTrashItems(
   ctx.restore();
 }
 
+function drawCarTooltipBadge(ctx: CanvasRenderingContext2D, car: Car, isSelected = false) {
+  if (!car.destLabel) return;
+
+  if (isSelected) {
+    ctx.save();
+    ctx.strokeStyle = '#FACC15';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.arc(car.wx, car.wy, 11, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  const text = `→ ${car.destLabel}`;
+  ctx.save();
+  ctx.font = '600 10px Inter, system-ui, sans-serif';
+  const tw = ctx.measureText(text).width;
+  const px = Math.round(car.wx - (tw + 12) / 2);
+  const py = Math.round(car.wy - 26);
+
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+  ctx.beginPath();
+  ctx.roundRect(px, py, tw + 12, 16, 4);
+  ctx.fill();
+  ctx.strokeStyle = isSelected ? '#FACC15' : 'rgba(250, 204, 21, 0.75)';
+  ctx.lineWidth = isSelected ? 1.4 : 1;
+  ctx.stroke();
+
+  ctx.fillStyle = '#FEF9C3';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, px + 6, py + 8);
+  ctx.restore();
+}
+
 function drawHoveredCarTooltip(
   ctx: CanvasRenderingContext2D,
   sim: CitySimulation,
   worldX: number,
-  worldY: number
+  worldY: number,
+  alreadyDrawnId?: string
 ) {
   let nearest: Car | null = null;
   let bestDist = 18;
@@ -1783,27 +1823,8 @@ function drawHoveredCarTooltip(
       nearest = car;
     }
   }
-  if (!nearest || !nearest.destLabel) return;
-
-  const text = `→ ${nearest.destLabel}`;
-  ctx.save();
-  ctx.font = '600 10px Inter, system-ui, sans-serif';
-  const tw = ctx.measureText(text).width;
-  const px = Math.round(nearest.wx - (tw + 12) / 2);
-  const py = Math.round(nearest.wy - 26);
-
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
-  ctx.beginPath();
-  ctx.roundRect(px, py, tw + 12, 16, 4);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(250, 204, 21, 0.75)';
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  ctx.fillStyle = '#FEF9C3';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, px + 6, py + 8);
-  ctx.restore();
+  if (!nearest || !nearest.destLabel || nearest.id === alreadyDrawnId) return;
+  drawCarTooltipBadge(ctx, nearest, false);
 }
 
 function drawAnimals(

@@ -1532,8 +1532,108 @@ export function createBiomePreset(template: MapTemplateKind, customName?: string
   };
 }
 
+export function createTutorialPreset(): SavedMapData {
+  const tiles = createEmptyTiles();
+  const idx = (x: number, y: number) => y * GRID_COLS + x;
+
+  // Scenic creek & sandy bank on the east side
+  for (let y = 3; y <= 18; y++) {
+    const rx = 26 + Math.round(Math.sin(y * 0.45));
+    for (let dx = 0; dx <= 1; dx++) {
+      const tx = rx + dx;
+      if (tx >= 0 && tx < GRID_COLS) {
+        tiles[idx(tx, y)].terrain = 'water';
+      }
+    }
+    if (rx - 1 >= 0 && tiles[idx(rx - 1, y)].terrain === 'grass') {
+      tiles[idx(rx - 1, y)].terrain = 'sand';
+    }
+  }
+
+  // Forest groves on the west and far-east hills
+  const groveCoords: [number, number][] = [
+    [3, 4], [4, 4], [3, 5], [4, 5], [3, 16], [4, 16], [4, 17],
+    [29, 5], [30, 5], [30, 6], [29, 15], [30, 15], [30, 16],
+  ];
+  for (const [fx, fy] of groveCoords) {
+    if (tiles[idx(fx, fy)].terrain === 'grass') {
+      tiles[idx(fx, fy)].terrain = 'forest';
+    }
+  }
+
+  const setRoad = (x: number, y: number, offset = 0) => {
+    const t = tiles[idx(x, y)];
+    t.hasRoad = true;
+    t.intersection = { controlType: 'signal', cycleDuration: 18, phaseOffset: offset };
+  };
+
+  for (let x = 7; x <= 23; x++) {
+    setRoad(x, 6, 0);
+    setRoad(x, 10, 6);
+    setRoad(x, 14, 12);
+  }
+  for (let y = 6; y <= 14; y++) {
+    setRoad(7, y, 2);
+    setRoad(12, y, 5);
+    setRoad(18, y, 8);
+    setRoad(23, y, 11);
+  }
+
+  const place = (bpId: string, x: number, y: number, name?: string) => {
+    const t = tiles[idx(x, y)];
+    if (!t.hasRoad && t.terrain !== 'water') {
+      t.terrain = 'grass';
+      t.building = makeBuilding(bpId, x, y, name);
+    }
+  };
+
+  const homes: [number, number][] = [
+    [8, 7], [9, 7], [10, 7],
+    [8, 8], [9, 8],
+    [8, 12], [9, 12], [10, 12],
+    [20, 7], [21, 7],
+    [20, 12], [21, 12],
+  ];
+  homes.forEach(([hx, hy], i) => place('house', hx, hy, `House ${i + 1}`));
+
+  place('school', 14, 8, 'Tutorial School');
+  place('park', 15, 8, 'Central Park');
+  place('market', 14, 12, 'Corner Market');
+  place('electronics_shop', 15, 12, 'Pixel Electronics');
+  place('bakery', 19, 8, 'Morning Bakery');
+  place('hospital', 21, 8, 'Town Clinic');
+  place('police', 19, 13, 'Town Police');
+  place('fire_station', 20, 13, 'Town Firehouse');
+  place('office', 14, 13, 'Town Offices');
+  place('crops', 10, 13, 'Starter Farm');
+
+  // Leave (16, 11) and nearby central tiles open for the player's first City Hall!
+  const crossings: [number, number][] = [
+    [14, 10],
+    [16, 10],
+    [12, 8],
+    [18, 8],
+  ];
+  for (const [cx, cy] of crossings) {
+    const t = tiles[idx(cx, cy)];
+    if (t.hasRoad) t.hasZebraCrossing = true;
+  }
+
+  return {
+    id: 'tutorial_town',
+    name: 'Tutorial Town',
+    subtitle: 'Step-by-step guided town — place City Hall & learn the controls',
+    updatedAt: Date.now(),
+    gridCols: GRID_COLS,
+    gridRows: GRID_ROWS,
+    tiles,
+    customBlueprints: [],
+  };
+}
+
 export const PRESET_MAPS: SavedMapData[] = [
   buildOakridgePreset(),
   buildTwinBridgesPreset(),
   buildHarborMetroPreset(),
 ];
+

@@ -8,7 +8,8 @@ import { PauseModal } from './components/PauseModal';
 import { PermitProposalsModal } from './components/PermitProposalsModal';
 import { PlaceFinderModal } from './components/PlaceFinderModal';
 import { TitleScreen } from './components/TitleScreen';
-import { createBiomePreset, DEFAULT_BLUEPRINTS, PRESET_MAPS } from './data/defaultBlueprints';
+import { TutorialHighlightTarget, TutorialOverlay, TutorialStep } from './components/TutorialOverlay';
+import { createBiomePreset, createTutorialPreset, DEFAULT_BLUEPRINTS, PRESET_MAPS } from './data/defaultBlueprints';
 import { isHighwayTile, isIntersectionTile } from './engine/pathfinding';
 import { CameraState, HoverState, renderSimulation } from './engine/renderer';
 import { CitySimulation } from './engine/simulation';
@@ -177,18 +178,23 @@ export default function App() {
   const [justSaved, setJustSaved] = useState<boolean>(false);
 
   const [selection, setSelection] = useState<SelectionTarget | null>(null);
+  const [selectedCarId, setSelectedCarId] = useState<string | null>(null);
   const [stats, setStats] = useState<SimulationStats>(() => simRef.current!.getStats());
   const [inspectorTick, setInspectorTick] = useState<number>(0);
 
   const [isMapManagerOpen, setIsMapManagerOpen] = useState<boolean>(false);
   const [isPlaceFinderOpen, setIsPlaceFinderOpen] = useState<boolean>(false);
   const [isPermitsOpen, setIsPermitsOpen] = useState<boolean>(false);
+  const [tutorialStep, setTutorialStep] = useState<TutorialStep | null>(null);
   const [painterState, setPainterState] = useState<{
     open: boolean;
     mode: 'create_blueprint' | 'edit_blueprint' | 'edit_placed';
     targetTile?: { x: number; y: number };
     blueprint: BuildingBlueprint;
   } | null>(null);
+
+  const tutorialStepRef = useRef<TutorialStep | null>(tutorialStep);
+  tutorialStepRef.current = tutorialStep;
 
   // Refs for game loop access without re-binding RAF
   const gameStateRef = useRef(gameState);
@@ -197,6 +203,8 @@ export default function App() {
   toolModeRef.current = toolMode;
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
+  const selectedCarIdRef = useRef(selectedCarId);
+  selectedCarIdRef.current = selectedCarId;
   const activeBlueprintRef = useRef<BuildingBlueprint | null>(
     blueprints.find((b) => b.id === activeBlueprintId) || blueprints[0] || null
   );
@@ -324,6 +332,7 @@ export default function App() {
             camera: cameraRef.current,
             hover: hoverRef.current,
             selection: gameStateRef.current === 'PLAYING' ? selectionRef.current : null,
+            selectedCarId: gameStateRef.current === 'PLAYING' ? selectedCarIdRef.current : null,
             toolMode: gameStateRef.current === 'PLAYING' ? toolModeRef.current : 'select',
             activeBlueprint: activeBlueprintRef.current,
             showTrafficOverlay: showTrafficRef.current,
@@ -428,8 +437,9 @@ export default function App() {
         if (gameStateRef.current === 'PLAYING') {
           if (isUiHiddenRef.current) {
             setIsUiHidden(false);
-          } else if (selectionRef.current) {
+          } else if (selectionRef.current || selectedCarIdRef.current) {
             setSelection(null);
+            setSelectedCarId(null);
           } else {
             setGameState('PAUSED');
           }
@@ -732,10 +742,26 @@ export default function App() {
         const placed = sim.placeBuilding(tx, ty, bp);
         if (placed) {
           soundEngine.playPlaceBuilding();
-          setSelection({ type: 'building', x: tx, y: ty });
           setStats(sim.getStats());
           if (placed.category === 'city_hall') {
             setToolMode('select');
+            if (tutorialStepRef.current === 1) {
+              setSelection(null);
+              setTutorialStep(2);
+              sim.floatingLabels.push({
+                wx: (tx + 0.5) * TILE_SIZE,
+                wy: (ty + 0.2) * TILE_SIZE,
+                text: 'Now click City Hall!',
+                color: '#0F172A',
+                bgColor: '#FACC15',
+                age: 0,
+                maxAge: 3.4,
+              });
+            } else {
+              setSelection({ type: 'building', x: tx, y: ty });
+            }
+          } else {
+            setSelection({ type: 'building', x: tx, y: ty });
           }
         }
       }
@@ -780,9 +806,29 @@ export default function App() {
         capturePhotoAtClient(e.clientX, e.clientY);
         return;
       }
+      const { tx, ty, wx, wy } = screenToTile(e.clientX, e.clientY);
+      if (toolModeRef.current === 'select') {
+        let nearestCarId: string | null = null;
+        let bestDist = 18;
+        for (const car of simRef.current!.cars) {
+          const d = Math.hypot(car.wx - wx, car.wy - wy);
+          if (d < bestDist) {
+            bestDist = d;
+            nearestCarId = car.id;
+          }
+        }
+        if (nearestCarId) {
+          setSelectedCarId(nearestCarId);
+          setSelection(null);
+          soundEngine.playUiTick();
+          return;
+        }
+        setSelectedCarId(null);
+      } else {
+        setSelectedCarId(null);
+      }
       isPaintingToolRef.current = true;
       lastPaintedTileRef.current = '';
-      const { tx, ty } = screenToTile(e.clientX, e.clientY);
       applyToolAtTile(tx, ty, true);
     }
   };
@@ -883,6 +929,8 @@ export default function App() {
     setMapName(target.name);
     setBlueprints(sim.getAllBlueprints());
     setSelection(null);
+    setSelectedCarId(null);
+    setTutorialStep(null);
     setDraftNewsPhoto(null);
     setDraftInitialCrop(null);
     setStats(sim.getStats());
@@ -899,6 +947,8 @@ export default function App() {
     setMapName(created.name);
     setBlueprints(sim.getAllBlueprints());
     setSelection(null);
+    setSelectedCarId(null);
+    setTutorialStep(null);
     setDraftNewsPhoto(null);
     setDraftInitialCrop(null);
     setStats(sim.getStats());
@@ -912,6 +962,47 @@ export default function App() {
       setIsRunning(true);
     }
     fitCameraToViewport();
+  };
+
+  const handleStartTutorial = () => {
+    persistCurrentRuntimeMap();
+    const tutMap = createTutorialPreset();
+    const sim = simRef.current!;
+    sim.loadMap(tutMap);
+    sim.prepareForPlaySession();
+    sim.timeScale = 1;
+    sim.isRunning = true;
+    sessionInitializedRef.current = true;
+    setSelectedPresetId(tutMap.id);
+    setMapName(tutMap.name);
+    setBlueprints(sim.getAllBlueprints());
+    setSelection(null);
+    setSelectedCarId(null);
+    setDraftNewsPhoto(null);
+    setDraftInitialCrop(null);
+    setTimeScale(1);
+    setIsRunning(true);
+    setToolMode('pan');
+    setActiveBlueprintId('city_hall');
+    setGameState('PLAYING');
+    setTutorialStep(1);
+    setStats(sim.getStats());
+    cameraRef.current = {
+      x: 16 * TILE_SIZE,
+      y: 11 * TILE_SIZE,
+      zoom: Math.max(0.95, Math.min(1.25, window.innerWidth / (26 * TILE_SIZE))),
+    };
+    clampCamera(cameraRef.current);
+    sim.floatingLabels.push({
+      wx: 16.5 * TILE_SIZE,
+      wy: 11.25 * TILE_SIZE,
+      text: 'Place City Hall here!',
+      color: '#0F172A',
+      bgColor: '#FACC15',
+      age: 0,
+      maxAge: 4.5,
+    });
+    soundEngine.playUiTick();
   };
 
   const handleSaveMap = (name: string) => {
@@ -1197,6 +1288,52 @@ export default function App() {
       ? isHighwayTile(simRef.current.tiles, selectedTile.x, selectedTile.y)
       : false;
 
+  const isCityHallSelected = Boolean(selectedTile?.building?.category === 'city_hall');
+
+  // Auto-advance interactive tutorial steps on real player actions
+  useEffect(() => {
+    if (gameState !== 'PLAYING' || tutorialStep === null) return;
+    if (tutorialStep === 1 && stats.hasCityHall) {
+      setTutorialStep(2);
+    } else if (tutorialStep === 2 && isCityHallSelected) {
+      setTutorialStep(3);
+    }
+  }, [gameState, tutorialStep, stats.hasCityHall, isCityHallSelected]);
+
+  const selectedCarObj =
+    selectedCarId && gameState === 'PLAYING'
+      ? simRef.current.cars.find((c) => c.id === selectedCarId) || null
+      : null;
+
+  useEffect(() => {
+    if (gameState !== 'PLAYING' || tutorialStep !== 6 || timeScale <= 1) return;
+    const timer = window.setTimeout(() => {
+      setTutorialStep((prev) => (prev === 6 ? 7 : prev));
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [gameState, tutorialStep, timeScale]);
+
+  const tutorialHighlight: TutorialHighlightTarget =
+    gameState === 'PLAYING' && tutorialStep !== null
+      ? tutorialStep === 1 || tutorialStep === 2
+        ? 'city_hall_btn'
+        : tutorialStep === 3 || tutorialStep === 4
+        ? 'city_hall_inspector'
+        : tutorialStep === 5
+        ? 'select_tool'
+        : tutorialStep === 6
+        ? 'speed_up'
+        : tutorialStep === 7
+        ? 'clock_day'
+        : tutorialStep === 8
+        ? 'permits_news'
+        : tutorialStep === 9
+        ? 'map_traffic_music'
+        : tutorialStep === 10
+        ? 'hide_ui_save'
+        : null
+      : null;
+
   return (
     <div
       className="relative w-full h-[100dvh] overflow-hidden isolate touch-none bg-[#0F172A]"
@@ -1238,6 +1375,7 @@ export default function App() {
           onPermanentDeleteTrashedMap={handlePermanentDeleteTrashedMap}
           onEmptyTrash={handleEmptyTrash}
           onStartGame={handleStartGame}
+          onStartTutorial={handleStartTutorial}
         />
       )}
 
@@ -1256,6 +1394,7 @@ export default function App() {
           isMusicEnabled={isMusicEnabled}
           justSaved={justSaved}
           isUiHidden={isUiHidden}
+          tutorialHighlight={tutorialHighlight}
           onToggleRun={() => {
             const sim = simRef.current!;
             sim.isRunning = !sim.isRunning;
@@ -1400,6 +1539,7 @@ export default function App() {
               cameraRef.current.x = (hallTile.x + 0.5) * TILE_SIZE;
               cameraRef.current.y = (hallTile.y + 0.5) * TILE_SIZE;
               cameraRef.current.zoom = Math.max(cameraRef.current.zoom, 1.25);
+              setToolMode('select');
               setSelection({ type: 'building', x: hallTile.x, y: hallTile.y });
               soundEngine.playUiTick();
             }
@@ -1419,7 +1559,11 @@ export default function App() {
       {gameState === 'PLAYING' && selectedTile && !isUiHidden && (
         <div
           key={`${selectedTile.x}_${selectedTile.y}_${inspectorTick}`}
-          className="absolute top-32 xl:top-24 right-[max(0.875rem,env(safe-area-inset-right))] z-30 transform-gpu pointer-events-none max-h-[calc(100dvh-13rem)] overflow-y-auto touch-pan-y"
+          className={`absolute top-32 xl:top-24 right-[max(0.875rem,env(safe-area-inset-right))] z-30 transform-gpu pointer-events-none max-h-[calc(100dvh-13rem)] overflow-y-auto touch-pan-y rounded-xl ${
+            tutorialHighlight === 'city_hall_inspector' && isCityHallSelected
+              ? 'ring-2 ring-amber-400 shadow-[0_0_24px_rgba(251,191,36,0.55)]'
+              : ''
+          }`}
         >
           <InspectorPanel
             tile={selectedTile}
@@ -1561,6 +1705,7 @@ export default function App() {
         onRestoreTrashedMap={handleRestoreTrashedMap}
         onPermanentDeleteTrashedMap={handlePermanentDeleteTrashedMap}
         onEmptyTrash={handleEmptyTrash}
+        onStartTutorial={handleStartTutorial}
       />
 
       {/* Daily Photojournalism Newspaper Modal */}
@@ -1716,9 +1861,73 @@ export default function App() {
           soundEngine.playUiTick();
           persistCurrentRuntimeMap();
           setSelection(null);
+          setSelectedCarId(null);
+          setTutorialStep(null);
           setGameState('TITLE_MENU');
         }}
       />
+
+      {/* Interactive Step-by-Step Tutorial Guide */}
+      {gameState === 'PLAYING' && tutorialStep !== null && !isUiHidden && (
+        <TutorialOverlay
+          step={tutorialStep}
+          hasCityHall={stats.hasCityHall}
+          isCityHallSelected={isCityHallSelected}
+          isCityHallToolActive={toolMode === 'plot' && activeBlueprintId === 'city_hall'}
+          hasSelectedCar={Boolean(selectedCarObj)}
+          selectedCarDest={selectedCarObj?.destLabel || selectedCarObj?.destCategory}
+          timeScale={timeScale}
+          dayOfWeek={stats.dayOfWeek}
+          dayCount={stats.dayCount}
+          formattedTime={stats.formattedTime}
+          season={stats.season}
+          weather={stats.weather}
+          onSelectCityHallTool={() => {
+            setActiveBlueprintId('city_hall');
+            setToolMode('plot');
+            soundEngine.playUiTick();
+          }}
+          onSelectSelectTool={() => {
+            setToolMode('select');
+            soundEngine.playUiTick();
+          }}
+          onFocusCityHall={() => {
+            const hallTile = simRef.current!.tiles.find((t) => t.building?.category === 'city_hall');
+            if (hallTile) {
+              cameraRef.current.x = (hallTile.x + 0.5) * TILE_SIZE;
+              cameraRef.current.y = (hallTile.y + 0.5) * TILE_SIZE;
+              cameraRef.current.zoom = Math.max(cameraRef.current.zoom, 1.25);
+              clampCamera(cameraRef.current);
+              setToolMode('select');
+              setSelection({ type: 'building', x: hallTile.x, y: hallTile.y });
+              soundEngine.playUiTick();
+            }
+          }}
+          onSetTimeScale={(s) => {
+            simRef.current!.timeScale = s;
+            setTimeScale(s);
+            soundEngine.playUiTick();
+          }}
+          onNextStep={() => {
+            soundEngine.playUiTick();
+            setTutorialStep((prev) => {
+              if (prev === null) return null;
+              return prev < 10 ? ((prev + 1) as TutorialStep) : null;
+            });
+          }}
+          onPrevStep={() => {
+            soundEngine.playUiTick();
+            setTutorialStep((prev) => {
+              if (prev === null || prev <= 1) return prev;
+              return (prev - 1) as TutorialStep;
+            });
+          }}
+          onCloseTutorial={() => {
+            soundEngine.playUiTick();
+            setTutorialStep(null);
+          }}
+        />
+      )}
     </div>
   );
 }

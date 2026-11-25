@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Compass, FolderOpen, RotateCcw, Save, Trash2, X } from 'lucide-react';
+import { Compass, FolderOpen, GraduationCap, RotateCcw, Save, Trash2, X } from 'lucide-react';
 import { BIOME_TEMPLATES, PRESET_MAPS } from '../data/defaultBlueprints';
 import { MapTemplateKind, SavedMapData, TrashedMapEntry } from '../types/game';
 import { soundEngine } from '../utils/sound';
@@ -17,6 +17,7 @@ interface MapManagerModalProps {
   onRestoreTrashedMap: (id: string) => void;
   onPermanentDeleteTrashedMap: (id: string) => void;
   onEmptyTrash: () => void;
+  onStartTutorial: () => void;
 }
 
 export function MapManagerModal({
@@ -32,6 +33,7 @@ export function MapManagerModal({
   onRestoreTrashedMap,
   onPermanentDeleteTrashedMap,
   onEmptyTrash,
+  onStartTutorial,
 }: MapManagerModalProps) {
   const [saveName, setSaveName] = useState(currentMapName);
   const [selectedTemplate, setSelectedTemplate] = useState<MapTemplateKind>('island');
@@ -286,10 +288,27 @@ export function MapManagerModal({
                 )}
               </div>
 
-              {/* Built-in Presets */}
+              {/* Built-in Presets & Tutorial */}
               <div>
                 <div className="text-xs font-medium text-slate-400 mb-2">Built-In Scenarios</div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playUiTick();
+                      onStartTutorial();
+                      onClose();
+                    }}
+                    className="text-left p-3 rounded-lg bg-sky-950/40 hover:bg-sky-900/50 border border-sky-500/50 hover:border-sky-400 transition-colors"
+                  >
+                    <div className="flex items-center gap-1.5 text-sm font-semibold text-sky-200 truncate">
+                      <GraduationCap className="w-4 h-4 text-sky-300 shrink-0" />
+                      <span>Tutorial Town</span>
+                    </div>
+                    <div className="text-xs text-slate-300 mt-1 line-clamp-2">
+                      Interactive step-by-step guide: City Hall, chaos, speed &amp; day clock
+                    </div>
+                  </button>
                   {PRESET_MAPS.map((preset) => (
                     <button
                       key={preset.id}

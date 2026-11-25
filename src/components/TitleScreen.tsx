@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, Compass, RotateCcw, Trash2, X } from 'lucide-react';
+import { BookOpen, Compass, GraduationCap, RotateCcw, Trash2, X } from 'lucide-react';
 import { BIOME_TEMPLATES, PRESET_MAPS } from '../data/defaultBlueprints';
 import { MapTemplateKind, SavedMapData, TrashedMapEntry } from '../types/game';
 
@@ -15,6 +15,7 @@ interface TitleScreenProps {
   onPermanentDeleteTrashedMap: (id: string) => void;
   onEmptyTrash: () => void;
   onStartGame: () => void;
+  onStartTutorial: () => void;
 }
 
 export function TitleScreen({
@@ -29,6 +30,7 @@ export function TitleScreen({
   onPermanentDeleteTrashedMap,
   onEmptyTrash,
   onStartGame,
+  onStartTutorial,
 }: TitleScreenProps) {
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [isTrashOpen, setIsTrashOpen] = useState(false);
@@ -230,7 +232,7 @@ export function TitleScreen({
             )}
           </div>
 
-          {/* Primary CTA, Guide Book & Trash Bin */}
+          {/* Primary CTA, Tutorial, Guide Book & Trash Bin */}
           <div className="flex flex-wrap items-center gap-2.5">
             <button
               type="button"
@@ -238,6 +240,15 @@ export function TitleScreen({
               className="px-7 py-3 rounded-lg bg-amber-400 hover:bg-amber-300 text-slate-950 font-display font-bold text-base tracking-tight transition-colors shadow-lg cursor-pointer whitespace-nowrap shrink-0"
             >
               Open Map Studio
+            </button>
+            <button
+              type="button"
+              onClick={onStartTutorial}
+              className="flex items-center gap-2 px-4 py-3 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/60 text-sky-200 font-semibold text-sm transition-colors shadow cursor-pointer whitespace-nowrap shrink-0"
+              title="Play interactive step-by-step Tutorial Town"
+            >
+              <GraduationCap className="w-4 h-4 text-sky-300" />
+              Tutorial
             </button>
             <button
               type="button"
@@ -379,46 +390,46 @@ export function TitleScreen({
               </button>
             </div>
 
-            <div className="p-5 overflow-y-auto touch-pan-y space-y-3 text-xs leading-relaxed text-slate-300">
-              <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-amber-300 mb-1">1. Biomes, Trash Bin &amp; 10-Day Expansion</div>
+            <div className="p-5 overflow-y-auto touch-pan-y space-y-2.5 text-xs leading-snug text-slate-300">
+              <div className="bg-slate-900/80 border border-rose-500/40 rounded-lg p-3">
+                <div className="font-semibold text-rose-300 mb-0.5">1. Find City Hall — Hub of Chaos</div>
                 <p>
-                  Play prebuilt towns or create a Valley, Island, Archipelago, Jungle, River, or Pond. Removed worlds go safely to the Trash Bin where you can Restore or permanently Delete them. Every 10 days unlocks 100 custom Land boxes (press L).
+                  Click <span className="text-amber-300 font-semibold">City Hall</span> on the map, press <span className="font-mono-tabular text-sky-300">F</span>, or tap the City Hall bar button to jump there. Inside: Nukes, Earthquakes, Tornadoes, Floods, Wars, Viruses, Protests, Events &amp; Basements.
                 </p>
               </div>
 
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-sky-300 mb-1">2. Daily Schedule, Electronics Shop &amp; Meat Stalls</div>
+                <div className="font-semibold text-amber-300 mb-0.5">2. Worlds, Trash Bin &amp; Land</div>
                 <p>
-                  Schools hold up to 100 students Mon–Fri (08:00–16:00). Stores including the Electronics Shop open 06:00–22:00, and butchers supply pop-up Meat Stalls. Watch for extra crashes on occasional Foggy days!
+                  Play cities or create Islands, Jungles, Rivers &amp; Ponds. Deleted worlds go to the Trash Bin. Every 10 days unlocks +100 Land boxes (<span className="font-mono-tabular">L</span>).
                 </p>
               </div>
 
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-violet-300 mb-1">3. Mayor Building Permits &amp; Citizen Proposals</div>
+                <div className="font-semibold text-sky-300 mb-0.5">3. Daily Hours &amp; Weather</div>
                 <p>
-                  Citizens propose building new houses, shops, offices, and venues on open plots, listing the requested building, location, and build duration in game time. Open the Permits file (or click the plot) to Allow or Decline!
+                  Schools run Mon–Fri (08:00–16:00). Stores &amp; Electronics Shop open 06:00–22:00; butchers supply Meat Stalls. Watch for crashes in Foggy weather.
                 </p>
               </div>
 
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-emerald-300 mb-1">4. Wildlife, Boats &amp; Traffic Courtesy</div>
+                <div className="font-semibold text-violet-300 mb-0.5">4. Permits &amp; Citizen Builds</div>
                 <p>
-                  Tree clumps spawn dry-land livestock and birds, while humans build canoes and boats along wide waters. Drivers swerve or wait when animals cross roads. Use Map Finder (F) or Refresh anytime.
+                  Citizens propose houses &amp; shops with location and build time. Open Permits to Allow or Decline.
                 </p>
               </div>
 
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-amber-300 mb-1">5. News Photo Cropper, Paperboy &amp; Reader Remarks</div>
+                <div className="font-semibold text-emerald-300 mb-0.5">5. Animals, Boats &amp; Roads</div>
                 <p>
-                  Open News once per day to capture a high-res photo, crop your frame, write the headline, and publish. A bicycling paperboy delivers papers to houses as funny citizen comments roll in.
+                  Forests spawn land animals, humans build boats on water, and cars swerve or wait for animals crossing roads.
                 </p>
               </div>
 
               <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-3">
-                <div className="font-semibold text-rose-300 mb-1">6. Disasters, Nuke Craters &amp; Basements</div>
+                <div className="font-semibold text-amber-300 mb-0.5">6. News &amp; Paperboy</div>
                 <p>
-                  City Hall chaos causes real damage: Nukes blast deep craters, Earthquakes split land with water rifts, Tornadoes destroy everything in their path, and Floods submerge the entire city as people rush into tall buildings. Build underground basements to survive strikes!
+                  Snap and crop a daily photo, publish a headline, and watch the paperboy deliver as funny comments roll in.
                 </p>
               </div>
             </div>

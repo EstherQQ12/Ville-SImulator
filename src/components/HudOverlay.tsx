@@ -54,6 +54,7 @@ import {
   WeatherType,
 } from '../types/game';
 import { PixelIconPreview } from './PixelIconPreview';
+import { TutorialHighlightTarget } from './TutorialOverlay';
 
 interface HudOverlayProps {
   mapName: string;
@@ -68,6 +69,7 @@ interface HudOverlayProps {
   isMusicEnabled: boolean;
   justSaved: boolean;
   isUiHidden: boolean;
+  tutorialHighlight?: TutorialHighlightTarget;
   onToggleRun: () => void;
   onSetTimeScale: (scale: number) => void;
   onJumpToMinutes: (minutes: number) => void;
@@ -141,6 +143,7 @@ export function HudOverlay({
   isMusicEnabled,
   justSaved,
   isUiHidden,
+  tutorialHighlight = null,
   onToggleRun,
   onSetTimeScale,
   onJumpToMinutes,
@@ -291,7 +294,11 @@ export function HudOverlay({
         {/* Top-Left: Time, Day-Night Cycle & Speed */}
         <div
           style={{ transform: `translate3d(${topLeftOffset.x}px, ${topLeftOffset.y}px, 0)` }}
-          className="pointer-events-auto flex flex-col gap-1.5 sm:gap-2 bg-[#0F172A]/95 border border-slate-700/80 rounded-xl px-2.5 py-2 sm:px-3.5 sm:py-2.5 shadow-lg max-w-full"
+          className={`pointer-events-auto flex flex-col gap-1.5 sm:gap-2 bg-[#0F172A]/95 border rounded-xl px-2.5 py-2 sm:px-3.5 sm:py-2.5 shadow-lg max-w-full transition-shadow ${
+            tutorialHighlight === 'clock_day'
+              ? 'border-amber-400 ring-2 ring-amber-400/90 shadow-[0_0_20px_rgba(251,191,36,0.55)]'
+              : 'border-slate-700/80'
+          }`}
         >
           <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
             <button
@@ -327,7 +334,9 @@ export function HudOverlay({
                 type="button"
                 onClick={onCycleSeason}
                 title="Season cycles every 10 days (click to preview next season)"
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/90 hover:bg-slate-700 text-slate-200 transition-colors"
+                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/90 hover:bg-slate-700 text-slate-200 transition-colors ${
+                  tutorialHighlight === 'clock_day' ? 'ring-1 ring-emerald-400' : ''
+                }`}
               >
                 <SeasonIcon season={stats.season} />
                 <span>{stats.season}</span>
@@ -336,7 +345,9 @@ export function HudOverlay({
                 type="button"
                 onClick={onCycleWeather}
                 title="Weather cycles naturally (click to preview next weather)"
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/90 hover:bg-slate-700 text-slate-200 transition-colors"
+                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-800/90 hover:bg-slate-700 text-slate-200 transition-colors ${
+                  tutorialHighlight === 'clock_day' ? 'ring-1 ring-sky-400' : ''
+                }`}
               >
                 <WeatherIcon weather={stats.weather} />
                 <span>{stats.weather}</span>
@@ -366,6 +377,10 @@ export function HudOverlay({
                     timeScale === s
                       ? 'bg-amber-400 text-slate-950 font-semibold'
                       : 'text-slate-300 hover:bg-slate-800'
+                  } ${
+                    tutorialHighlight === 'speed_up' && s > 1
+                      ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
+                      : ''
                   }`}
                 >
                   {s}×
@@ -580,7 +595,13 @@ export function HudOverlay({
         <div
           ref={topRightBarRef}
           style={{ transform: `translate3d(${topRightOffset.x}px, ${topRightOffset.y}px, 0)` }}
-          className="pointer-events-auto ml-auto flex items-center gap-2 bg-[#0F172A]/95 border border-slate-700/80 rounded-xl px-2.5 py-2 shadow-lg max-w-full overflow-x-auto touch-pan-x"
+          className={`pointer-events-auto ml-auto flex items-center gap-2 bg-[#0F172A]/95 border rounded-xl px-2.5 py-2 shadow-lg max-w-full overflow-x-auto touch-pan-x transition-shadow ${
+            tutorialHighlight === 'permits_news' ||
+            tutorialHighlight === 'map_traffic_music' ||
+            tutorialHighlight === 'hide_ui_save'
+              ? 'border-amber-400/80 ring-1 ring-amber-400/50'
+              : 'border-slate-700/80'
+          }`}
         >
           <button
             type="button"
@@ -821,7 +842,11 @@ export function HudOverlay({
               type="button"
               onClick={onOpenNewspaper}
               title={stats.dailyNewsHeadline}
-              className="relative flex items-center gap-1 px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-stone-100 transition-colors whitespace-nowrap shrink-0"
+              className={`relative flex items-center gap-1 px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-stone-100 transition-colors whitespace-nowrap shrink-0 ${
+                tutorialHighlight === 'permits_news'
+                  ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
+                  : ''
+              }`}
             >
               <Newspaper className="w-3.5 h-3.5 text-amber-300" />
               <span className="hidden sm:inline">News</span>
@@ -839,6 +864,10 @@ export function HudOverlay({
                 stats.pendingProposalsCount > 0
                   ? 'bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/60 text-amber-200'
                   : 'bg-slate-800 hover:bg-slate-700 text-amber-200'
+              } ${
+                tutorialHighlight === 'permits_news'
+                  ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
+                  : ''
               }`}
             >
               <FileText className="w-3.5 h-3.5 text-amber-300" />
@@ -853,7 +882,11 @@ export function HudOverlay({
               type="button"
               onClick={onOpenPlaceFinder}
               title="Find Places — Search buildings, stores, schools & alerts (F)"
-              className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-sky-300 transition-colors whitespace-nowrap shrink-0"
+              className={`flex items-center gap-1 px-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-sky-300 transition-colors whitespace-nowrap shrink-0 ${
+                tutorialHighlight === 'map_traffic_music'
+                  ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
+                  : ''
+              }`}
             >
               <MapPin className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Map</span>
@@ -862,7 +895,11 @@ export function HudOverlay({
               type="button"
               onClick={onRefreshSimulation}
               title="Refresh & Smooth Simulation — Clears laggy clutter without restarting your city"
-              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-300 transition-colors shrink-0"
+              className={`p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-300 transition-colors shrink-0 ${
+                tutorialHighlight === 'hide_ui_save'
+                  ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
+                  : ''
+              }`}
               aria-label="Refresh simulation"
             >
               <RefreshCw className="w-3.5 h-3.5" />
@@ -875,6 +912,10 @@ export function HudOverlay({
                 justSaved
                   ? 'bg-emerald-500 text-slate-950 font-semibold'
                   : 'bg-slate-800 hover:bg-slate-700 text-emerald-300'
+              } ${
+                tutorialHighlight === 'hide_ui_save'
+                  ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
+                  : ''
               }`}
             >
               {justSaved ? <Check className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}
@@ -888,6 +929,10 @@ export function HudOverlay({
                 showTrafficOverlay
                   ? 'bg-amber-400 text-slate-950'
                   : 'text-slate-300 hover:bg-slate-800'
+              } ${
+                tutorialHighlight === 'map_traffic_music'
+                  ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
+                  : ''
               }`}
             >
               <Activity className="w-4 h-4" />
@@ -908,6 +953,10 @@ export function HudOverlay({
                 isMusicEnabled
                   ? 'bg-teal-500/20 text-teal-300 border border-teal-500/50'
                   : 'text-slate-300 hover:bg-slate-800'
+              } ${
+                tutorialHighlight === 'map_traffic_music'
+                  ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
+                  : ''
               }`}
             >
               <Music className="w-4 h-4" />
@@ -924,7 +973,11 @@ export function HudOverlay({
               type="button"
               onClick={onToggleHideUi}
               title="Hide UI (H)"
-              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0"
+              className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 transition-colors whitespace-nowrap shrink-0 ${
+                tutorialHighlight === 'hide_ui_save'
+                  ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
+                  : ''
+              }`}
             >
               <EyeOff className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Hide UI</span>
@@ -979,11 +1032,15 @@ export function HudOverlay({
             <button
               type="button"
               onClick={() => onSelectTool('select')}
-              title="Select / Inspect Building or Intersection (V)"
+              title="Select / Inspect Building, Car, or Intersection (V)"
               className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
                 toolMode === 'select'
                   ? 'bg-amber-400 text-slate-950 font-semibold'
                   : 'text-slate-300 hover:bg-slate-800'
+              } ${
+                tutorialHighlight === 'select_tool'
+                  ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_12px_rgba(251,191,36,0.75)]'
+                  : ''
               }`}
             >
               <MousePointer2 className="w-4 h-4" />
@@ -1123,24 +1180,34 @@ export function HudOverlay({
                 <div key={bp.id} className="relative group shrink-0">
                   <button
                     type="button"
-                    onClick={() => onSelectBlueprint(bp.id)}
+                    onClick={() => {
+                      if (isCityHallCapped) {
+                        onFocusCityHall();
+                      } else {
+                        onSelectBlueprint(bp.id);
+                      }
+                    }}
                     title={
                       isCityHallCapped
-                        ? `${bp.name} (1/1 built — only 1 City Hall allowed)`
+                        ? `${bp.name} (1/1 built) — Click to go to City Hall (Chaos, Events & Permits)`
                         : `Plot ${bp.name}`
                     }
                     className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors whitespace-nowrap ${
                       active
                         ? 'bg-slate-800 border-amber-400 text-white'
                         : isCityHallCapped
-                        ? 'bg-slate-900/50 border-slate-800/80 text-slate-400 opacity-75 hover:border-slate-600 hover:text-slate-200'
+                        ? 'bg-slate-900/80 border-amber-500/40 text-amber-200 hover:border-amber-400 hover:bg-slate-800 hover:text-white'
                         : 'bg-slate-900/80 border-slate-800 text-slate-300 hover:border-slate-600 hover:text-white'
+                    } ${
+                      tutorialHighlight === 'city_hall_btn' && bp.category === 'city_hall'
+                        ? 'ring-2 ring-amber-400 animate-pulse shadow-[0_0_16px_rgba(251,191,36,0.8)]'
+                        : ''
                     }`}
                   >
                     <PixelIconPreview iconGrid={bp.iconGrid} size={22} />
                     <span>{bp.name}</span>
                     {isCityHallCapped && (
-                      <span className="font-mono-tabular text-[10px] text-amber-400/90">1/1</span>
+                      <span className="font-mono-tabular text-[10px] text-amber-300">Go</span>
                     )}
                   </button>
                   <button
