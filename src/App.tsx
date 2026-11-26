@@ -156,7 +156,6 @@ export default function App() {
   const lastPointerTileRef = useRef<{ x: number; y: number } | null>(null);
   const zebraPaintTargetRef = useRef<boolean>(true);
   const footbridgePaintTargetRef = useRef<boolean>(true);
-  const landPaintModeRef = useRef<'add' | 'remove'>('add');
   const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const sessionInitializedRef = useRef<boolean>(Boolean(simRef.current.dayCount > 1));
   const lastWallClockMsRef = useRef<number>(Date.now());
@@ -171,7 +170,6 @@ export default function App() {
   const [isRunning, setIsRunning] = useState<boolean>(true);
   const [timeScale, setTimeScale] = useState<number>(1);
   const [toolMode, setToolMode] = useState<ToolMode>('pan');
-  const [landBrushSize, setLandBrushSize] = useState<number>(1);
   const [blueprints, setBlueprints] = useState<BuildingBlueprint[]>(() =>
     simRef.current!.getAllBlueprints()
   );
@@ -209,8 +207,6 @@ export default function App() {
   gameStateRef.current = gameState;
   const toolModeRef = useRef(toolMode);
   toolModeRef.current = toolMode;
-  const landBrushSizeRef = useRef(landBrushSize);
-  landBrushSizeRef.current = landBrushSize;
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
   const selectedCarIdRef = useRef(selectedCarId);
@@ -362,7 +358,6 @@ export default function App() {
             showTrafficOverlay: showTrafficRef.current,
             showGrid: gameStateRef.current === 'PLAYING' ? showGridRef.current : false,
             wallTimeSeconds: now / 1000,
-            landBrushSize: landBrushSizeRef.current,
           });
           ctx.restore();
         }
@@ -509,9 +504,6 @@ export default function App() {
       } else if (lower === 'b') {
         setToolMode('footbridge');
         soundEngine.playUiTick();
-      } else if (lower === 'l') {
-        setToolMode('land');
-        soundEngine.playUiTick();
       } else if (lower === 'f') {
         setIsPlaceFinderOpen(true);
         soundEngine.playUiTick();
@@ -648,57 +640,6 @@ export default function App() {
     lastPaintedTileRef.current = key;
 
     const mode = toolModeRef.current;
-
-    if (mode === 'land') {
-      if (isClickStart) {
-        landPaintModeRef.current = tile.terrain === 'void' ? 'add' : 'remove';
-      }
-      const res = sim.applyExpansionLandBrush(
-        tx,
-        ty,
-        landBrushSizeRef.current,
-        landPaintModeRef.current
-      );
-      if (res.changedCount > 0) {
-        if (landPaintModeRef.current === 'add') {
-          soundEngine.playPlaceBuilding();
-        } else {
-          soundEngine.playBulldoze();
-          if (
-            selectionRef.current &&
-            res.affectedTiles.some(
-              (pt) => pt.x === selectionRef.current?.x && pt.y === selectionRef.current?.y
-            )
-          ) {
-            setSelection(null);
-          }
-        }
-        setStats(sim.getStats());
-      } else if (isClickStart && res.lockedOriginalOnly) {
-        sim.floatingLabels.push({
-          wx: (tx + 0.5) * TILE_SIZE,
-          wy: (ty + 0.35) * TILE_SIZE,
-          text: 'Original Land Locked',
-          color: '#FEF2F2',
-          bgColor: '#991B1B',
-          age: 0,
-          maxAge: 1.5,
-        });
-        soundEngine.playBulldoze();
-      } else if (isClickStart && landPaintModeRef.current === 'add' && res.outOfCredits) {
-        sim.floatingLabels.push({
-          wx: (tx + 0.5) * TILE_SIZE,
-          wy: (ty + 0.35) * TILE_SIZE,
-          text: 'No Land Boxes Left!',
-          color: '#FEF2F2',
-          bgColor: '#991B1B',
-          age: 0,
-          maxAge: 1.5,
-        });
-        soundEngine.playBulldoze();
-      }
-      return;
-    }
 
     if (mode === 'select') {
       if (!isClickStart) return;
@@ -1625,11 +1566,6 @@ export default function App() {
           onCycleWeather={() => {
             simRef.current!.cycleWeather(true);
             setStats(simRef.current!.getStats());
-          }}
-          landBrushSize={landBrushSize}
-          onSetLandBrushSize={(size) => {
-            setLandBrushSize(Math.max(1, Math.min(5, size)));
-            soundEngine.playUiTick();
           }}
         />
       )}

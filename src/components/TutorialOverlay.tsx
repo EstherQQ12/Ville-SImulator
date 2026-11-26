@@ -113,8 +113,8 @@ export const GUIDE_BOOK_STEPS: GuideBookStep[] = [
         tone: 'amber',
       },
       {
-        label: 'Seasons & Land:',
-        text: 'Changes every 10 days (+100 Land via L; click Land to pick 1×1–5×5 fill size).',
+        label: 'Seasons & Auto Land:',
+        text: 'Changes every 10 days and automatically expands new land around your town.',
         tone: 'emerald',
       },
       {

@@ -303,7 +303,7 @@ export function TitleScreen({
 
           {/* Single flat control-hint line */}
           <div className="pt-2 border-t border-slate-800/80 text-xs text-slate-400 font-mono-tabular">
-            Slide Paint Plots · Permits &amp; Mayor File · L Expand Land · F Find Places · Space Pause
+            Slide Paint Plots · Permits &amp; Mayor File · F Find Places · Space Pause
           </div>
         </div>
       </div>

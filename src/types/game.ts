@@ -18,7 +18,6 @@ export type ToolMode =
   | 'plot'
   | 'water'
   | 'forest'
-  | 'land'
   | 'bulldoze'
   | 'camera';
 

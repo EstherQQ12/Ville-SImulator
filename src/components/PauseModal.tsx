@@ -39,7 +39,7 @@ export function PauseModal({
           </div>
           <div className="flex justify-between">
             <span className="text-slate-400">Tools</span>
-            <span className="font-mono-tabular text-slate-200">V Select · R Road · L Land · X Remove</span>
+            <span className="font-mono-tabular text-slate-200">V Select · R Road · X Remove</span>
           </div>
           <div className="flex justify-between">
             <span className="text-slate-400">Map / Traffic</span>

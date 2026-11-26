@@ -15,10 +15,8 @@ import {
   Hand,
   Leaf,
   MapPin,
-  Maximize2,
   Meh,
   Menu,
-  Minus,
   Moon,
   MousePointer2,
   Music,
@@ -93,8 +91,6 @@ interface HudOverlayProps {
   onFocusCityHall: () => void;
   onCycleSeason: () => void;
   onCycleWeather: () => void;
-  landBrushSize: number;
-  onSetLandBrushSize: (size: number) => void;
 }
 
 function PhaseIcon({ phase }: { phase: TimePhase }) {
@@ -167,8 +163,6 @@ export function HudOverlay({
   onFocusCityHall,
   onCycleSeason,
   onCycleWeather,
-  landBrushSize,
-  onSetLandBrushSize,
 }: HudOverlayProps) {
   const [topLeftOffset, setTopLeftOffset] = useState({ x: 0, y: 0 });
   const [topRightOffset, setTopRightOffset] = useState({ x: 0, y: 0 });
@@ -957,59 +951,7 @@ export function HudOverlay({
       </div>
 
       {/* Bottom-Left Compact Dock (Keeps Bottom-Right Corner Empty & Unobstructed) */}
-      <div className="flex flex-col items-start gap-1.5 w-full min-w-0 pr-40 sm:pr-48">
-        {toolMode === 'land' && (
-          <div
-            style={{ transform: `translate3d(${bottomOffset.x}px, ${bottomOffset.y}px, 0)` }}
-            className="pointer-events-auto max-w-full overflow-x-auto touch-pan-x flex items-center gap-1.5 bg-[#0F172A]/95 border border-emerald-500/40 rounded-xl px-2.5 py-1.5 shadow-xl"
-          >
-            <span className="text-[11px] font-semibold text-emerald-300 whitespace-nowrap">
-              Fill Size:
-            </span>
-            <button
-              type="button"
-              onClick={() => onSetLandBrushSize(Math.max(1, landBrushSize - 1))}
-              disabled={landBrushSize <= 1}
-              title="Decrease blocks filled at once"
-              className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              aria-label="Decrease land fill size"
-            >
-              <Minus className="w-3.5 h-3.5" />
-            </button>
-            {[1, 2, 3, 4, 5].map((size) => (
-              <button
-                key={size}
-                type="button"
-                onClick={() => onSetLandBrushSize(size)}
-                title={`Fill ${size * size} ${size === 1 ? 'block' : 'blocks'} at once`}
-                className={`px-2 py-0.5 rounded-md text-[11px] font-mono-tabular font-semibold transition-colors whitespace-nowrap ${
-                  landBrushSize === size
-                    ? 'bg-emerald-400 text-slate-950'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                }`}
-              >
-                {size}×{size}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => onSetLandBrushSize(Math.min(5, landBrushSize + 1))}
-              disabled={landBrushSize >= 5}
-              title="Increase blocks filled at once"
-              className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              aria-label="Increase land fill size"
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-            <span className="text-[11px] text-slate-300 whitespace-nowrap pl-1 border-l border-slate-700/80">
-              {landBrushSize * landBrushSize} {landBrushSize === 1 ? 'block' : 'blocks'} ·{' '}
-              <span className="text-emerald-300 font-semibold font-mono-tabular">
-                {stats.expansionCredits}
-              </span>{' '}
-              left
-            </span>
-          </div>
-        )}
+      <div className="flex justify-start w-full min-w-0 pr-40 sm:pr-48">
         <div
           ref={bottomToolbarRef}
           style={{ transform: `translate3d(${bottomOffset.x}px, ${bottomOffset.y}px, 0)` }}
@@ -1143,43 +1085,6 @@ export function HudOverlay({
               }`}
             >
               <Trees className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => onSelectTool('land')}
-              title={`Expand / Move Custom Land (L) — ${stats.expansionCredits} boxes available (unlocks 100 boxes every 10 days)`}
-              className={`flex items-center gap-1 px-2 py-2 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                toolMode === 'land'
-                  ? 'bg-emerald-400 text-slate-950 font-semibold'
-                  : stats.expansionCredits > 0
-                  ? 'text-emerald-300 hover:bg-slate-800'
-                  : 'text-slate-400 hover:bg-slate-800'
-              }`}
-            >
-              <Maximize2 className="w-3.5 h-3.5" />
-              <span>Land</span>
-              {landBrushSize > 1 && (
-                <span
-                  className={`font-mono-tabular text-[10px] px-1 rounded ${
-                    toolMode === 'land'
-                      ? 'bg-slate-950/25 text-slate-950 font-bold'
-                      : 'bg-emerald-500/20 text-emerald-200'
-                  }`}
-                >
-                  {landBrushSize}×{landBrushSize}
-                </span>
-              )}
-              <span
-                className={`font-mono-tabular text-[10px] px-1 rounded ${
-                  toolMode === 'land'
-                    ? 'bg-slate-950/20 text-slate-950'
-                    : stats.expansionCredits > 0
-                    ? 'bg-emerald-500/20 text-emerald-300'
-                    : 'bg-slate-800 text-slate-400'
-                }`}
-              >
-                {stats.expansionCredits}
-              </span>
             </button>
             <button
               type="button"

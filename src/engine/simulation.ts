@@ -609,9 +609,9 @@ export class CitySimulation {
     for (const savedTile of data.tiles) {
       if (!this.inBounds(savedTile.x, savedTile.y)) continue;
       const idx = savedTile.y * this.gridCols + savedTile.x;
-      this.tiles[idx].terrain = savedTile.terrain;
+      this.tiles[idx].terrain = savedTile.terrain === 'void' ? 'grass' : savedTile.terrain;
       this.tiles[idx].isDefaultLand =
-        savedTile.terrain === 'void' ? false : savedTile.isDefaultLand ?? true;
+        savedTile.terrain === 'void' ? true : savedTile.isDefaultLand ?? true;
       this.tiles[idx].hasRoad = savedTile.hasRoad;
       this.tiles[idx].hasZebraCrossing = Boolean(savedTile.hasZebraCrossing);
       this.tiles[idx].hasFootbridge = Boolean(savedTile.hasFootbridge);
@@ -641,7 +641,7 @@ export class CitySimulation {
       this.season = savedState.season ?? 'Spring';
       this.weather = savedState.weather ?? 'Sunny';
       this.weatherTimer = savedState.weatherTimer ?? 95;
-      this.expansionCredits = savedState.expansionCredits ?? 0;
+      this.expansionCredits = 0;
       this.lastExpansionMilestone =
         savedState.lastExpansionMilestone ?? Math.floor(this.dayCount / 10);
       this.newspapers = savedState.newspapers
@@ -1177,16 +1177,18 @@ export class CitySimulation {
       this.lastExpansionMilestone += 1;
       const padX = 3;
       const padY = 2;
-      const newCols = this.gridCols + padX * 2;
-      const newRows = this.gridRows + padY * 2;
+      const oldCols = this.gridCols;
+      const oldRows = this.gridRows;
+      const newCols = oldCols + padX * 2;
+      const newRows = oldRows + padY * 2;
       const newTiles: MapTile[] = [];
       for (let y = 0; y < newRows; y++) {
         for (let x = 0; x < newCols; x++) {
           newTiles.push({
             x,
             y,
-            terrain: 'void',
-            isDefaultLand: false,
+            terrain: 'grass',
+            isDefaultLand: true,
             hasRoad: false,
             hasZebraCrossing: false,
             hasFootbridge: false,
@@ -1210,8 +1212,24 @@ export class CitySimulation {
           ...oldTile,
           x: nx,
           y: ny,
+          terrain: oldTile.terrain === 'void' ? 'grass' : oldTile.terrain,
+          isDefaultLand: oldTile.terrain === 'void' ? true : oldTile.isDefaultLand,
           building: movedBld,
         };
+      }
+      // Organically sprinkle forest clusters onto auto-filled outer land next to existing forests
+      for (let y = 0; y < newRows; y++) {
+        for (let x = 0; x < newCols; x++) {
+          const isNewRing =
+            x < padX || x >= padX + oldCols || y < padY || y >= padY + oldRows;
+          if (!isNewRing) continue;
+          const clampedX = Math.max(padX, Math.min(padX + oldCols - 1, x));
+          const clampedY = Math.max(padY, Math.min(padY + oldRows - 1, y));
+          const edgeTile = newTiles[clampedY * newCols + clampedX];
+          if (edgeTile?.terrain === 'forest' && Math.random() < 0.28) {
+            newTiles[y * newCols + x].terrain = 'forest';
+          }
+        }
       }
       this.tiles = newTiles;
       this.gridCols = newCols;
@@ -1386,20 +1404,19 @@ export class CitySimulation {
         dy: (this.pendingCameraShift?.dy ?? 0) + shiftPxY,
       };
 
-      const landBonus = 100;
-      this.expansionCredits += landBonus;
+      this.expansionCredits = 0;
       this.rebuildCaches();
       this.floatingLabels.push({
         wx: (this.gridCols * TILE_SIZE) / 2,
         wy: (this.gridRows * TILE_SIZE) / 2 - 20,
-        text: `DAY ${this.dayCount} MILESTONE! +${landBonus} Boxes of Land`,
+        text: `DAY ${this.dayCount} EXPANSION! New Land Auto-Filled`,
         color: '#ECFDF5',
         bgColor: '#047857',
         age: 0,
         maxAge: 3.4,
       });
       this.logDailyNews(
-        `BIGGER MAP UNLOCKED (Day ${this.dayCount}): Surveyors cleared ${landBonus} new boxes of land around ${this.mapName}—use the Land tool to place them wherever you want!`
+        `BIGGER MAP UNLOCKED (Day ${this.dayCount}): New surrounding land automatically filled in around ${this.mapName}, giving your town fresh space to grow!`
       );
     }
   }
